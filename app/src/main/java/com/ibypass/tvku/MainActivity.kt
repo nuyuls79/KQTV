@@ -17,8 +17,6 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import com.ibypass.tvku.screens.SecurityWarningScreen
 import com.ibypass.tvku.screens.ProfessionalIPTVScreen
-import com.ibypass.tvku.utils.FirebaseManager
-import com.ibypass.tvku.utils.UpdateChecker
 import com.ibypass.tvku.utils.RulesManager
 
 class MainActivity : ComponentActivity() {
@@ -50,14 +48,16 @@ class MainActivity : ComponentActivity() {
                         or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                         or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                 )
+
         window.statusBarColor = android.graphics.Color.BLACK
         window.navigationBarColor = android.graphics.Color.BLACK
 
         lifecycleScope.launch {
             try {
+
                 RulesManager.initializeRules(this@MainActivity)
                 val rulesValid = RulesManager.validateRules(this@MainActivity)
-                
+
                 if (!rulesValid) {
                     Toast.makeText(this@MainActivity, "Terjadi kesalahan sistem", Toast.LENGTH_SHORT).show()
                     finish()
@@ -68,7 +68,7 @@ class MainActivity : ComponentActivity() {
                     showSecurityWarning()
                     return@launch
                 }
-                
+
                 val app = application as TvkuApp
                 if (!app.isAuthReady()) {
                     val authenticated = app.ensureAuthenticated()
@@ -79,15 +79,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                UpdateChecker.checkForUpdate(this@MainActivity) {
-                    FirebaseManager.fetchPlaylistUrl { playlistUrl ->
-                        setContent {
-                            TvkuTheme(darkTheme = true) {
-                                ProfessionalIPTVScreen(playlistUrl = playlistUrl ?: "")
-                            }
-                        }
+                // PLAYLIST HARDCODE
+                val playlistUrl = "https://raw.githubusercontent.com/mimipipi22/lalajo/refs/heads/main/playlist25"
+
+                setContent {
+                    TvkuTheme(darkTheme = true) {
+                        ProfessionalIPTVScreen(
+                            playlistUrl = playlistUrl
+                        )
                     }
                 }
+
             } catch (e: Exception) {
                 Toast.makeText(this@MainActivity, "Terjadi kesalahan", Toast.LENGTH_SHORT).show()
                 finish()
@@ -114,7 +116,7 @@ class MainActivity : ComponentActivity() {
         try {
             vpnCheckJob?.cancel()
             lifecycleScope.coroutineContext.cancelChildren()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         } finally {
             finish()
         }
@@ -141,28 +143,40 @@ class MainActivity : ComponentActivity() {
     @RequiresApi(Build.VERSION_CODES.M)
     private fun startVpnMonitoring() {
         vpnCheckJob?.cancel()
+
         vpnCheckJob = lifecycleScope.launch {
             try {
+
                 while (isActive && !isFinishing && !isDestroyed) {
+
                     delay(30000)
+
                     if (!isActive) break
+
                     if (VpnHelper.isVpnOrProxyActive(this@MainActivity)) {
+
                         withContext(Dispatchers.Main) {
+
                             if (!isFinishing && !isDestroyed) {
+
                                 Toast.makeText(
                                     this@MainActivity,
                                     "VPN/Proxy detected! Closing app for security.",
                                     Toast.LENGTH_LONG
                                 ).show()
+
                                 delay(2000)
+
                                 cleanupAndFinish()
                             }
                         }
+
                         break
                     }
                 }
-            } catch (e: CancellationException) {
-            } catch (e: Exception) {
+
+            } catch (_: CancellationException) {
+            } catch (_: Exception) {
             }
         }
     }
