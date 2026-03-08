@@ -2,17 +2,16 @@ package com.ibypass.tvku
 
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.ibypass.tvku.ui.theme.TvkuTheme
-import com.ibypass.tvku.utils.RulesManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -29,47 +28,13 @@ class SplashActivity : ComponentActivity() {
 
         lifecycleScope.launch {
 
-            try {
+            delay(1200)
 
-                // Delay kecil supaya splash terlihat
-                delay(800)
+            startActivity(
+                Intent(this@SplashActivity, MainActivity::class.java)
+            )
 
-                // Inisialisasi Rules
-                RulesManager.initializeRules(this@SplashActivity)
-
-                val rulesValid = RulesManager.validateRules(this@SplashActivity)
-
-                if (!rulesValid) {
-                    Toast.makeText(
-                        this@SplashActivity,
-                        "Terjadi kesalahan sistem",
-                        Toast.LENGTH_SHORT
-                    ).show()
-
-                    finish()
-                    return@launch
-                }
-
-                // Delay transisi
-                delay(600)
-
-                // Masuk ke MainActivity
-                startActivity(
-                    Intent(this@SplashActivity, MainActivity::class.java)
-                )
-
-                finish()
-
-            } catch (e: Exception) {
-
-                Toast.makeText(
-                    this@SplashActivity,
-                    "Gagal memulai aplikasi",
-                    Toast.LENGTH_SHORT
-                ).show()
-
-                finish()
-            }
+            finish()
         }
     }
 }
