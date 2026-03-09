@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // PLAYLIST HARDCODE
-                val playlistUrl = "https://iptv-org.github.io/iptv/index.m3u"
+                val playlistUrl = "https://raw.githubusercontent.com/mimipipi22/lalajo/refs/heads/main/playlist25"
 
                 setContent {
                     TvkuTheme(darkTheme = true) {
