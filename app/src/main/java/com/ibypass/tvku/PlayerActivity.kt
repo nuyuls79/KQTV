@@ -78,8 +78,6 @@ class PlayerActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "PlayerActivity"
-        // ClearKey UUID standar
-        private val CLEARKEY_UUID = UUID.fromString("e2719d58-a985-b3c9-781a-b030af78d30e")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -730,7 +728,6 @@ private fun createSimplePlayerView(
 
     val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
-    // PERBAIKAN UTAMA: Buat DRM Session Manager dengan benar
     val drmSessionManager = createDrmSessionManager(context, headers, httpDataSourceFactory)
     
     val mediaSourceFactory = when {
@@ -757,7 +754,6 @@ private fun createSimplePlayerView(
         .setMediaSourceFactory(mediaSourceFactory)
         .build()
 
-    // PERBAIKAN UTAMA: MediaItem dengan DRM config yang benar
     val mediaItem = createMediaItem(videoUrl, headers)
 
     exoPlayer.addListener(object : Player.Listener {
@@ -793,18 +789,6 @@ private fun createSimplePlayerView(
         override fun onRenderedFirstFrame() {
             Log.d("PlayerActivity", "✓ First frame rendered!")
         }
-        
-        override fun onEvents(player: Player, events: Player.Events) {
-            if (events.contains(Player.EVENT_DRM_SESSION_ACQUIRED)) {
-                Log.d("PlayerActivity", "✓ DRM Session Acquired")
-            }
-            if (events.contains(Player.EVENT_DRM_KEYS_LOADED)) {
-                Log.d("PlayerActivity", "✓ DRM Keys Loaded")
-            }
-            if (events.contains(Player.EVENT_DRM_SESSION_MANAGER_ERROR)) {
-                Log.e("PlayerActivity", "✗ DRM Session Manager Error")
-            }
-        }
     })
 
     playerView.player = exoPlayer
@@ -816,9 +800,6 @@ private fun createSimplePlayerView(
     return playerView
 }
 
-/**
- * PERBAIKAN UTAMA: MediaItem dengan DRM configuration yang benar untuk ClearKey
- */
 @OptIn(UnstableApi::class)
 private fun createMediaItem(videoUrl: String, headers: Map<String, String>): MediaItem {
     val drmType = headers["drm_type"]?.lowercase()
@@ -832,13 +813,10 @@ private fun createMediaItem(videoUrl: String, headers: Map<String, String>): Med
                 drmType.contains("clearkey") -> {
                     Log.d("PlayerActivity", "Building ClearKey MediaItem")
                     
-                    // PERBAIKAN: Untuk ClearKey, kita perlu set license URI meskipun kita pakai LocalMediaDrmCallback
-                    // Media3 memerlukan ini untuk inisialisasi DRM session
                     val drmConfig = MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID)
                         .setMultiSession(true)
                         .setForceDefaultLicenseUri(false)
                     
-                    // Jika key adalah URL, set sebagai license URI
                     if (drmKey.startsWith("http")) {
                         drmConfig.setLicenseUri(drmKey)
                     }
@@ -864,9 +842,6 @@ private fun createMediaItem(videoUrl: String, headers: Map<String, String>): Med
     return builder.build()
 }
 
-/**
- * PERBAIKAN UTAMA: DRM Session Manager dengan pendekatan berbeda untuk ClearKey
- */
 @OptIn(UnstableApi::class)
 private fun createDrmSessionManager(
     context: android.content.Context,
@@ -913,7 +888,6 @@ private fun createDrmSessionManager(
 
         Log.d("PlayerActivity", "Building session manager with UUID: $uuid")
         
-        // PERBAIKAN: Gunakan playClearSamplesWithoutKeys(true) untuk debugging
         val sessionManager = DefaultDrmSessionManager.Builder()
             .setUuidAndExoMediaDrmProvider(uuid, FrameworkMediaDrm.DEFAULT_PROVIDER)
             .setMultiSession(true)
@@ -928,9 +902,6 @@ private fun createDrmSessionManager(
     }
 }
 
-/**
- * PERBAIKAN UTAMA: ClearKey Callback dengan format yang benar-benar sesuai EME spec
- */
 @OptIn(UnstableApi::class)
 private fun createClearKeyCallback(
     drmKey: String,
@@ -939,36 +910,23 @@ private fun createClearKeyCallback(
     
     Log.d("PlayerActivity", "Creating ClearKey callback for: ${drmKey.take(30)}")
     
-    // Deteksi format dan konversi ke JSON yang benar
     val clearKeyJson = when {
-        // Format 1: HTTP URL
         drmKey.startsWith("http") -> {
             return HttpMediaDrmCallback(drmKey, httpDataSourceFactory)
         }
         
-        // Format 2: Data URI
         drmKey.startsWith("data:application/json;base64,") -> {
             val base64 = drmKey.removePrefix("data:application/json;base64,")
             val decoded = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), Charsets.UTF_8)
             fixClearKeyJson(decoded)
         }
         
-        // Format 3: JSON langsung
         drmKey.trim().startsWith("{") -> {
             fixClearKeyJson(drmKey)
         }
         
-        // Format 4: HEX KID:KEY (Vision+ format)
-        // Contoh: d386001215594043a8995db796ad9e9c:3404792cb4c804902acdc6ca65c1a298
         drmKey.contains(":") && isHexFormat(drmKey) -> {
             hexToClearKeyJson(drmKey)
-        }
-        
-        // Format 5: Single key hex (32 chars)
-        drmKey.length == 32 && drmKey.matches(Regex("[0-9a-fA-F]+")) -> {
-            // Asumsi ini adalah key, tapi kita butuh KID juga
-            Log.w("PlayerActivity", "Single hex key detected, need KID!")
-            throw IllegalArgumentException("Format harus KID:KEY")
         }
         
         else -> {
@@ -978,14 +936,9 @@ private fun createClearKeyCallback(
     }
     
     Log.d("PlayerActivity", "ClearKey JSON: $clearKeyJson")
-    
-    // PERBAIKAN UTAMA: Pastikan encoding UTF-8 yang benar
     return LocalMediaDrmCallback(clearKeyJson.toByteArray(Charsets.UTF_8))
 }
 
-/**
- * Konversi format HEX KID:KEY ke JSON ClearKey yang valid
- */
 private fun hexToClearKeyJson(hexInput: String): String {
     Log.d("PlayerActivity", "Converting HEX to ClearKey JSON")
     
@@ -997,32 +950,25 @@ private fun hexToClearKeyJson(hexInput: String): String {
     val kidHex = parts[0].trim().replace(Regex("[^0-9a-fA-F]"), "")
     val keyHex = parts[1].trim().replace(Regex("[^0-9a-fA-F]"), "")
     
-    Log.d("PlayerActivity", "KID HEX ($kidHex.length): ${kidHex.take(16)}...")
-    Log.d("PlayerActivity", "KEY HEX ($keyHex.length): ${keyHex.take(16)}...")
+    Log.d("PlayerActivity", "KID HEX (${kidHex.length}): ${kidHex.take(16)}...")
+    Log.d("PlayerActivity", "KEY HEX (${keyHex.length}): ${keyHex.take(16)}...")
     
-    // Validasi panjang
     if (kidHex.length != 32 || keyHex.length != 32) {
         Log.w("PlayerActivity", "Hex length not 32 chars! KID=${kidHex.length}, KEY=${keyHex.length}")
     }
     
-    // Convert hex to bytes
     val kidBytes = hexStringToByteArray(kidHex)
     val keyBytes = hexStringToByteArray(keyHex)
     
-    // Encode to Base64URL (RFC 4648)
     val kidBase64 = base64UrlEncode(kidBytes)
     val keyBase64 = base64UrlEncode(keyBytes)
     
     Log.d("PlayerActivity", "KID Base64URL: $kidBase64")
     Log.d("PlayerActivity", "KEY Base64URL: $keyBase64")
     
-    // Format JSON sesuai EME spec - wajib ada "kty": "oct"
     return """{"keys":[{"kty":"oct","kid":"$kidBase64","k":"$keyBase64"}]}"""
 }
 
-/**
- * Helper: Convert hex string to byte array
- */
 private fun hexStringToByteArray(hex: String): ByteArray {
     val len = hex.length
     val data = ByteArray(len / 2)
@@ -1034,17 +980,11 @@ private fun hexStringToByteArray(hex: String): ByteArray {
     return data
 }
 
-/**
- * Helper: Base64URL encoding (RFC 4648)
- */
 private fun base64UrlEncode(data: ByteArray): String {
     return android.util.Base64.encodeToString(data, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING)
         .trim()
 }
 
-/**
- * Helper: Cek apakah string adalah format HEX KID:KEY
- */
 private fun isHexFormat(str: String): Boolean {
     val parts = str.split(":")
     if (parts.size != 2) return false
@@ -1053,9 +993,6 @@ private fun isHexFormat(str: String): Boolean {
            parts[1].replace(Regex("[^0-9a-fA-F]"), "").matches(hexPattern)
 }
 
-/**
- * Perbaiki dan validasi JSON ClearKey yang sudah ada
- */
 private fun fixClearKeyJson(json: String): String {
     try {
         val obj = JSONObject(json)
@@ -1071,10 +1008,8 @@ private fun fixClearKeyJson(json: String): String {
             val key = keys.getJSONObject(i)
             val fixedKey = JSONObject()
             
-            // Wajib ada kty: oct
             fixedKey.put("kty", "oct")
             
-            // Fix kid dan k ke base64url
             if (key.has("kid")) {
                 val kid = key.getString("kid")
                 fixedKey.put("kid", toBase64Url(kid))
@@ -1099,15 +1034,9 @@ private fun fixClearKeyJson(json: String): String {
     }
 }
 
-/**
- * Convert ke base64url
- */
 private fun toBase64Url(str: String): String {
-    // Jika sudah base64url, return as-is
     if (!str.contains("+") && !str.contains("/") && !str.contains("=")) {
         return str
     }
-    
-    // Convert dari base64 standar
     return str.replace("+", "-").replace("/", "_").replace("=", "")
 }
