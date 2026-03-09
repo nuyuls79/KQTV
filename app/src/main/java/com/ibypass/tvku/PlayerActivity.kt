@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -34,9 +33,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.ui.input.key.*
-import androidx.compose.ui.focus.*
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -47,6 +43,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.ui.PlayerView
+import androidx.media3.common.C
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkMediaDrm
@@ -55,11 +53,15 @@ import androidx.media3.exoplayer.drm.LocalMediaDrmCallback
 import androidx.media3.exoplayer.drm.MediaDrmCallback
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.ui.PlayerView
-import androidx.media3.common.C
 import androidx.media3.ui.AspectRatioFrameLayout
 import kotlinx.coroutines.delay
 import org.json.JSONObject
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.focus.*
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.ZoomOutMap
+
 
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
@@ -71,17 +73,14 @@ class PlayerActivity : AppCompatActivity() {
     var trackSelector: DefaultTrackSelector? = null
     private var currentQuality: QualityOption? = null
 
+
     private val fullscreenHandler = Handler(Looper.getMainLooper())
     private var isActivityVisible = false
-
-    companion object {
-        private const val TAG = "PlayerActivity"
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // PERBAIKAN DRM: Tambahkan FLAG_SECURE agar sistem mengizinkan rendering konten terlindungi
+        // PERBAIKAN DRM 1: Tambahkan FLAG_SECURE agar sistem mengizinkan rendering konten terlindungi
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         
         if (!VpnHelper.isNetworkSecure(this)) {
@@ -114,28 +113,11 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
         }
-
-        // PERBAIKAN: Tambahkan mapping khusus untuk drm_key dan drm_type jika ada di extras langsung
-        intent.getStringExtra("drm_key")?.let {
-            headerMap["drm_key"] = it
-            Log.d(TAG, "DRM Key from extras: ${it.take(20)}...")
-        }
-        intent.getStringExtra("drm_type")?.let {
-            headerMap["drm_type"] = it
-            Log.d(TAG, "DRM Type from extras: $it")
-        }
-        intent.getStringExtra("manifest_type")?.let {
-            headerMap["manifest_type"] = it
-        }
-
         val secureHeaders = VpnHelper.generateSecureHeaders(this)
         val combinedHeaders = mutableMapOf<String, String>()
         combinedHeaders.putAll(secureHeaders)
         combinedHeaders.putAll(headerMap)
         headers = combinedHeaders
-
-        Log.d(TAG, "Final headers: ${headers.keys}")
-        Log.d(TAG, "Video URL: $videoUrl")
 
         if (videoUrl.isNullOrEmpty()) {
             Toast.makeText(this, "URL tidak valid", Toast.LENGTH_SHORT).show()
@@ -180,7 +162,6 @@ class PlayerActivity : AppCompatActivity() {
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error hiding system UI", e)
         }
     }
 
@@ -310,7 +291,6 @@ fun CustomPlayerScreen(
         try {
             focusRequester.requestFocus()
         } catch (e: Exception) {
-            Log.e("PlayerScreen", "Error requesting focus", e)
         }
     }
 
@@ -468,6 +448,7 @@ fun CustomPlayerScreen(
             },
             modifier = Modifier.fillMaxSize(),
             update = { playerView ->
+                // Update aspect ratio ketika state berubah
                 playerView.resizeMode = aspectRatioMode
             }
         )
@@ -607,6 +588,7 @@ fun XmlBasedControlOverlay(
         modifier = modifier
             .focusGroup()
     ) {
+        var interactionTimestamp by remember { mutableStateOf(System.currentTimeMillis()) }
         if (!isLocked) {
             val interactionSource = remember { MutableInteractionSource() }
             val isFocused by interactionSource.collectIsFocusedAsState()
@@ -1003,10 +985,6 @@ fun formatTime(timeMs: Long): String {
     }
 }
 
-// ============================================
-// PERBAIKAN UTAMA - DRM CLEARKEY HANDLING
-// ============================================
-
 @UnstableApi
 private fun createSimplePlayerView(
     context: android.content.Context,
@@ -1024,6 +1002,8 @@ private fun createSimplePlayerView(
 
     val playerView = PlayerView(context).apply {
         useController = false
+        // PERBAIKAN DRM 2: Pastikan menggunakan SurfaceView (Default PlayerView menggunakan SurfaceView)
+        // Jangan paksa ke TextureView karena Widevine L1 butuh secure surface
         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT 
         setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
         setBackgroundColor(android.graphics.Color.BLACK)
@@ -1034,9 +1014,6 @@ private fun createSimplePlayerView(
         setPadding(0, 0, 0, 0)
     }
 
-    Log.d("PlayerActivity", "Creating player for URL: $videoUrl")
-    Log.d("PlayerActivity", "Headers: ${headers.keys.joinToString()}")
-
     val requestProperties = mutableMapOf<String, String>()
     headers.forEach { (key, value) ->
         if (!key.startsWith("drm_")) {
@@ -1045,7 +1022,7 @@ private fun createSimplePlayerView(
     }
 
     val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-        .setUserAgent(requestProperties["user-agent"] ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .setUserAgent(requestProperties["user-agent"] ?: "TvkuPlayer/1.0")
         .setConnectTimeoutMs(15000)
         .setReadTimeoutMs(15000)
         .setDefaultRequestProperties(requestProperties)
@@ -1054,7 +1031,7 @@ private fun createSimplePlayerView(
     val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
     val drmSessionManager = createDrmSessionManager(context, headers, httpDataSourceFactory)
-    Log.d("PlayerActivity", "DRM Session Manager created: $drmSessionManager")
+
 
     val mediaSourceFactory = when {
         headers["manifest_type"]?.lowercase() == "dash" -> {
@@ -1063,18 +1040,17 @@ private fun createSimplePlayerView(
         headers["manifest_type"]?.lowercase() == "hls" -> {
             HlsMediaSource.Factory(dataSourceFactory)
         }
+        headers["manifest_type"]?.lowercase() == "progressive" -> {
+            ProgressiveMediaSource.Factory(dataSourceFactory)
+        }
         else -> {
-            when {
-                videoUrl.endsWith(".mpd", ignoreCase = true) -> DashMediaSource.Factory(dataSourceFactory)
-                videoUrl.endsWith(".m3u8", ignoreCase = true) -> HlsMediaSource.Factory(dataSourceFactory)
-                else -> DefaultMediaSourceFactory(dataSourceFactory)
-            }
+            DefaultMediaSourceFactory(dataSourceFactory)
         }
     }.setDrmSessionManagerProvider { drmSessionManager }
 
     val trackSelector = DefaultTrackSelector(context).apply {
         parameters = buildUponParameters()
-            .setMaxVideoSize(1920, 1080)
+            .setMaxVideoSize(1280, 720)
             .build()
     }
 
@@ -1092,36 +1068,19 @@ private fun createSimplePlayerView(
     exoPlayer.addListener(object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             onLoadingChanged(playbackState == Player.STATE_BUFFERING)
-            val state = when(playbackState) {
-                Player.STATE_IDLE -> "IDLE"
-                Player.STATE_BUFFERING -> "BUFFERING"
-                Player.STATE_READY -> "READY"
-                Player.STATE_ENDED -> "ENDED"
-                else -> "UNKNOWN"
-            }
-            Log.d("PlayerActivity", "Playback State: $state")
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            Log.e("PlayerActivity", "Player Error [${error.errorCode}]: ${error.errorCodeName}", error)
-            val errorMessage = when (error.errorCode) {
-                PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED -> 
-                    "Gagal mendapatkan license DRM. Format ClearKey mungkin salah."
-                PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR ->
-                    "Error sistem DRM. Device tidak support."
-                PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ->
-                    "Decoder error. Coba restart aplikasi."
-                else -> error.message ?: "Error: ${error.errorCodeName}"
+            val errorMessage = when {
+                videoUrl.startsWith("rtmp") && error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> {
+                    "RTMP connection failed. Please check the stream URL and network connection."
+                }
+                videoUrl.startsWith("rtmp") && error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> {
+                    "RTMP stream error. The stream may be offline or invalid."
+                }
+                else -> error.message ?: "Playback error"
             }
             onError(errorMessage)
-        }
-        
-        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
-            Log.d("PlayerActivity", "Video Size Changed: ${videoSize.width}x${videoSize.height}")
-        }
-        
-        override fun onRenderedFirstFrame() {
-            Log.d("PlayerActivity", "First frame rendered successfully!")
         }
     })
 
@@ -1142,219 +1101,179 @@ private fun createDrmSessionManager(
     httpDataSourceFactory: DefaultHttpDataSource.Factory
 ): DrmSessionManager {
 
-    val drmType = headers["drm_type"]?.lowercase()
+    val drmType = headers["drm_type"]
     val drmLicense = headers["drm_key"] ?: headers["license_url"]
 
-    Log.d("PlayerActivity", "Creating DRM Session Manager")
-    Log.d("PlayerActivity", "DRM Type: $drmType")
-    Log.d("PlayerActivity", "DRM License: ${drmLicense?.take(30)}...")
-
     if (drmType.isNullOrEmpty() || drmLicense.isNullOrEmpty()) {
-        Log.d("PlayerActivity", "No DRM config found, returning DRM_UNSUPPORTED")
         return DrmSessionManager.DRM_UNSUPPORTED
     }
 
     return try {
         val mediaDrmCallback: MediaDrmCallback = when {
-            drmType.contains("clearkey") -> {
-                handleClearKeyLicense(drmLicense, httpDataSourceFactory)
+            drmType.lowercase().contains("clearkey") -> {
+
+                val clearkeyData = when {
+                    drmLicense.startsWith("data:application/json;base64,") -> {
+                        val base64Data = drmLicense.removePrefix("data:application/json;base64,")
+                        try {
+                            val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                            val decoded = String(decodedBytes, Charsets.UTF_8).trim()
+
+                            processAndFixClearkeyJson(decoded)
+                        } catch (e: Exception) {
+                            return DrmSessionManager.DRM_UNSUPPORTED
+                        }
+                    }
+                    drmLicense.startsWith("{") -> {
+                        processAndFixClearkeyJson(drmLicense)
+                    }
+                    drmLicense.startsWith("http") -> {
+                        HttpMediaDrmCallback(drmLicense, httpDataSourceFactory)
+                    }
+                    drmLicense.contains(":") -> {
+                        convertHexToJson(drmLicense)
+                    }
+                    else -> {
+                        Uri.decode(drmLicense)
+                    }
+                }
+
+                if (clearkeyData is String) {
+
+                    if (!clearkeyData.contains("keys") || !clearkeyData.contains("kid")) {
+                        return DrmSessionManager.DRM_UNSUPPORTED
+                    }
+
+                    val cleanJson = clearkeyData.trim()
+                    LocalMediaDrmCallback(cleanJson.toByteArray(Charsets.UTF_8))
+                } else {
+                    clearkeyData as MediaDrmCallback
+                }
             }
 
-            drmType.contains("widevine") -> {
+            drmType.lowercase().contains("widevine") -> {
                 if (context is PlayerActivity && !context.isDrmWidevineSupported()) {
                     return DrmSessionManager.DRM_UNSUPPORTED
                 }
+
                 val callback = HttpMediaDrmCallback(drmLicense, httpDataSourceFactory)
+
                 headers["drm_token"]?.let { token ->
                     callback.setKeyRequestProperty("Authorization", "Bearer $token")
                 }
+
                 headers["authorization"]?.let { auth ->
                     callback.setKeyRequestProperty("Authorization", auth)
                 }
+
                 callback
             }
 
             else -> {
-                Log.w("PlayerActivity", "Unsupported DRM type: $drmType")
                 return DrmSessionManager.DRM_UNSUPPORTED
             }
         }
 
         val drmSchemeUuid = when {
-            drmType.contains("clearkey") -> C.CLEARKEY_UUID
-            drmType.contains("widevine") -> C.WIDEVINE_UUID
-            drmType.contains("playready") -> C.PLAYREADY_UUID
+            drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
+            drmType.lowercase().contains("widevine") -> C.WIDEVINE_UUID
+            drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
             else -> {
-                Log.w("PlayerActivity", "Unknown DRM scheme: $drmType")
                 return DrmSessionManager.DRM_UNSUPPORTED
             }
         }
 
-        Log.d("PlayerActivity", "Building DRM Session Manager with UUID: $drmSchemeUuid")
-
-        DefaultDrmSessionManager.Builder()
+        // PERBAIKAN DRM 3: Tambahkan multiSession(true) untuk stream Live seperti RCTI
+        val sessionManager = DefaultDrmSessionManager.Builder()
             .setUuidAndExoMediaDrmProvider(drmSchemeUuid, FrameworkMediaDrm.DEFAULT_PROVIDER)
             .setMultiSession(true)
             .build(mediaDrmCallback)
+        sessionManager
 
     } catch (e: Exception) {
-        Log.e("PlayerActivity", "Error creating DRM Session Manager: ${e.message}", e)
         DrmSessionManager.DRM_UNSUPPORTED
     }
 }
 
-/**
- * Handler untuk berbagai format ClearKey license
- */
-@OptIn(UnstableApi::class)
-private fun handleClearKeyLicense(
-    drmLicense: String,
-    httpDataSourceFactory: DefaultHttpDataSource.Factory
-): MediaDrmCallback {
-    
-    Log.d("PlayerActivity", "Handling ClearKey license, format detection...")
-    
-    return when {
-        // Format 1: URL license server
-        drmLicense.startsWith("http") -> {
-            Log.d("PlayerActivity", "ClearKey format: HTTP URL")
-            HttpMediaDrmCallback(drmLicense, httpDataSourceFactory)
-        }
-        
-        // Format 2: Data URI base64
-        drmLicense.startsWith("data:application/json;base64,") -> {
-            Log.d("PlayerActivity", "ClearKey format: Data URI Base64")
-            val base64Data = drmLicense.removePrefix("data:application/json;base64,")
-            val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-            val decoded = String(decodedBytes, Charsets.UTF_8)
-            LocalMediaDrmCallback(processClearKeyJson(decoded).toByteArray(Charsets.UTF_8))
-        }
-        
-        // Format 3: Raw JSON string
-        drmLicense.trim().startsWith("{") -> {
-            Log.d("PlayerActivity", "ClearKey format: Raw JSON")
-            LocalMediaDrmCallback(processClearKeyJson(drmLicense).toByteArray(Charsets.UTF_8))
-        }
-        
-        // Format 4: HEX format KID:KEY (Vision+ format)
-        // Contoh: d386001215594043a8995db796ad9e9c:3404792cb4c804902acdc6ca65c1a298
-        drmLicense.contains(":") && isValidHexFormat(drmLicense) -> {
-            Log.d("PlayerActivity", "ClearKey format: HEX KID:KEY (Vision+)")
-            val clearkeyJson = convertHexToClearKeyJson(drmLicense)
-            Log.d("PlayerActivity", "Converted to JSON: $clearkeyJson")
-            LocalMediaDrmCallback(clearkeyJson.toByteArray(Charsets.UTF_8))
-        }
-        
-        // Format 5: Coba sebagai base64 langsung
-        else -> {
-            try {
-                android.util.Base64.decode(drmLicense, android.util.Base64.DEFAULT)
-                Log.d("PlayerActivity", "ClearKey format: Raw Base64")
-                LocalMediaDrmCallback(drmLicense.toByteArray(Charsets.UTF_8))
-            } catch (e: Exception) {
-                Log.d("PlayerActivity", "ClearKey format: Fallback to JSON processing")
-                LocalMediaDrmCallback(processClearKeyJson(drmLicense).toByteArray(Charsets.UTF_8))
-            }
-        }
-    }
-}
-
-/**
- * Cek apakah string adalah format HEX KID:KEY yang valid
- */
-private fun isValidHexFormat(license: String): Boolean {
-    val parts = license.split(":")
-    if (parts.size != 2) return false
-    
-    val hexPattern = Regex("^[0-9a-fA-F]+$")
-    return parts[0].trim().matches(hexPattern) && parts[1].trim().matches(hexPattern)
-}
-
-/**
- * Konversi format HEX KID:KEY ke JSON ClearKey
- * Contoh input: d386001215594043a8995db796ad9e9c:3404792cb4c804902acdc6ca65c1a298
- */
-private fun convertHexToClearKeyJson(hexLicense: String): String {
+private fun processAndFixClearkeyJson(jsonString: String): String {
     return try {
-        val parts = hexLicense.split(":")
-        if (parts.size != 2) {
-            throw IllegalArgumentException("Format harus KID:KEY")
-        }
 
-        val kidHex = parts[0].trim().replace("-", "").replace(" ", "")
-        val keyHex = parts[1].trim().replace("-", "").replace(" ", "")
-
-        // Validasi panjang hex (harus 32 karakter untuk 16 bytes)
-        if (kidHex.length != 32 || keyHex.length != 32) {
-            Log.w("PlayerActivity", "Hex length unusual - KID: ${kidHex.length}, KEY: ${keyHex.length}")
-        }
-
-        // Convert hex ke bytes
-        val kidBytes = kidHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-
-        // Encode ke Base64URL (URL-safe, no padding)
-        val kidBase64 = android.util.Base64.encodeToString(
-            kidBytes, 
-            android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING
-        ).trim()
-        
-        val keyBase64 = android.util.Base64.encodeToString(
-            keyBytes,
-            android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING
-        ).trim()
-
-        // Format JSON ClearKey sesuai EME spec
-        """{"keys":[{"kty":"oct","k":"$keyBase64","kid":"$kidBase64"}]}"""
-
-    } catch (e: Exception) {
-        Log.e("PlayerActivity", "ClearKey conversion error: ${e.message}", e)
-        throw e
-    }
-}
-
-/**
- * Proses dan perbaiki JSON ClearKey yang sudah ada
- */
-private fun processClearKeyJson(jsonString: String): String {
-    return try {
         val jsonObj = JSONObject(jsonString)
-        
-        if (jsonObj.has("keys")) {
-            val keysArray = jsonObj.getJSONArray("keys")
-            
-            for (i in 0 until keysArray.length()) {
-                val keyObj = keysArray.getJSONObject(i)
-                
-                // Konversi ke Base64URL jika perlu
-                if (keyObj.has("kid")) {
-                    val kid = keyObj.getString("kid").trim()
-                    keyObj.put("kid", convertToBase64Url(kid))
+        val keysArray = jsonObj.getJSONArray("keys")
+
+        for (i in 0 until keysArray.length()) {
+            val keyObj = keysArray.getJSONObject(i)
+            val kid = keyObj.getString("kid").trim()
+            val k = keyObj.getString("k").trim()
+
+            val isKidHex = kid.length >= 16 && kid.matches(Regex("[0-9a-fA-F]+"))
+            val isKeyHex = k.length >= 16 && k.matches(Regex("[0-9a-fA-F]+"))
+
+            if (isKidHex) {
+                val kidBytes = kid.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                val kidBase64 = android.util.Base64.encodeToString(kidBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
+                keyObj.put("kid", kidBase64)
+            } else {
+                val urlSafeKid = convertToUrlSafeBase64(kid)
+                if (urlSafeKid != kid) {
+                    keyObj.put("kid", urlSafeKid)
                 }
-                if (keyObj.has("k")) {
-                    val k = keyObj.getString("k").trim()
-                    keyObj.put("k", convertToBase64Url(k))
+            }
+
+            if (isKeyHex) {
+                val keyBytes = k.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                val keyBase64 = android.util.Base64.encodeToString(keyBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
+                keyObj.put("k", keyBase64)
+            } else {
+                val urlSafeKey = convertToUrlSafeBase64(k)
+                if (urlSafeKey != k) {
+                    keyObj.put("k", urlSafeKey)
                 }
             }
         }
-        
-        jsonObj.toString()
-        
+
+        val cleanedJson = JSONObject()
+        cleanedJson.put("keys", keysArray)
+
+        val result = cleanedJson.toString().trim()
+        result
+
     } catch (e: Exception) {
-        Log.w("PlayerActivity", "JSON processing failed, returning as-is: ${e.message}")
         jsonString
     }
 }
 
-/**
- * Konversi base64 standar ke base64url (URL-safe, no padding)
- */
-private fun convertToBase64Url(base64String: String): String {
+private fun convertToUrlSafeBase64(base64String: String): String {
     return base64String
         .trim()
         .replace('+', '-')
         .replace('/', '_')
         .replace("=", "")
+}
+
+private fun convertHexToJson(kidKeyHex: String): String {
+    return try {
+        val parts = kidKeyHex.split(":")
+        if (parts.size != 2) {
+            return "{}"
+        }
+
+        val kidHex = parts[0].trim()
+        val keyHex = parts[1].trim()
+
+        val kidBytes = kidHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+        val kidBase64 = android.util.Base64.encodeToString(kidBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
+        val keyBase64 = android.util.Base64.encodeToString(keyBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
+
+        val clearkeyJson = """{"keys":[{"kty":"oct","k":"$keyBase64","kid":"$kidBase64"}]}"""
+
+        clearkeyJson
+
+    } catch (e: Exception) {
+        "{}"
+    }
 }
 
 @OptIn(UnstableApi::class)
@@ -1364,48 +1283,62 @@ private fun createMediaItemWithDrm(
     context: android.content.Context
 ): MediaItem {
 
-    val drmType = headers["drm_type"]?.lowercase()
+    val drmType = headers["drm_type"]
     val drmLicense = headers["drm_key"] ?: headers["license_url"]
 
-    val mediaItemBuilder = MediaItem.Builder()
-        .setUri(Uri.parse(videoUrl))
+    var mediaItem = MediaItem.fromUri(Uri.parse(videoUrl))
 
     if (!drmType.isNullOrEmpty() && !drmLicense.isNullOrEmpty()) {
+
         try {
             val drmSchemeUuid = when {
-                drmType.contains("clearkey") -> C.CLEARKEY_UUID
-                drmType.contains("widevine") -> C.WIDEVINE_UUID
-                drmType.contains("playready") -> C.PLAYREADY_UUID
-                else -> null
-            } ?: return mediaItemBuilder.build()
+                drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
+                drmType.lowercase().contains("widevine") -> {
+                    if (context is PlayerActivity && !context.isDrmWidevineSupported()) {
+                        return mediaItem
+                    }
+                    C.WIDEVINE_UUID
+                }
+                drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
+                else -> {
+                    return mediaItem
+                }
+            }
 
             val drmConfigBuilder = MediaItem.DrmConfiguration.Builder(drmSchemeUuid)
 
             when {
-                drmType.contains("clearkey") -> {
-                    // Untuk ClearKey dengan license lokal (hex/json),
-                    // license dihandle oleh LocalMediaDrmCallback di createDrmSessionManager
+                drmType.lowercase().contains("clearkey") -> {
                     if (drmLicense.startsWith("http")) {
                         drmConfigBuilder
                             .setLicenseUri(drmLicense)
                             .setForceDefaultLicenseUri(true)
+                    } else {
                     }
                 }
-                
-                drmType.contains("widevine") || drmType.contains("playready") -> {
+                drmType.lowercase().contains("widevine") -> {
                     drmConfigBuilder
                         .setLicenseUri(drmLicense)
+                        // PERBAIKAN DRM 4: Pastikan multiSession aktif di MediaItem
                         .setMultiSession(true)
+                        .setForceDefaultLicenseUri(true)
+                }
+                drmType.lowercase().contains("playready") -> {
+                    drmConfigBuilder
+                        .setLicenseUri(drmLicense)
                         .setForceDefaultLicenseUri(true)
                 }
             }
 
-            mediaItemBuilder.setDrmConfiguration(drmConfigBuilder.build())
+            mediaItem = MediaItem.Builder()
+                .setUri(Uri.parse(videoUrl))
+                .setDrmConfiguration(drmConfigBuilder.build())
+                .build()
 
         } catch (e: Exception) {
-            Log.e("PlayerActivity", "Error creating DRM config: ${e.message}")
+            mediaItem = MediaItem.fromUri(Uri.parse(videoUrl))
         }
     }
 
-    return mediaItemBuilder.build()
+    return mediaItem
 }
