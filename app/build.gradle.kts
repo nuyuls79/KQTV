@@ -55,12 +55,12 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // ExoPlayer (Media3) - versi 1.5.0
+    // ExoPlayer (Media3) - versi 1.3.0
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.exoplayer.dash)
-    implementation(libs.media3.exoplayer.drm)      // ← pastikan alias ini mengarah ke media3-exoplayer-drm
+    implementation(libs.media3.exoplayer.drm)      // pastikan alias ini benar
     implementation(libs.media3.datasource)
     implementation(libs.androidx.media3.datasource.rtmp)
 
