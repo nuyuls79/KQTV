@@ -19,22 +19,20 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.*
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.C
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -42,18 +40,28 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.dash.DashMediaSource
-import androidx.media3.exoplayer.drm.*
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.ui.PlayerView
+import androidx.media3.common.C
+import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
+import androidx.media3.exoplayer.drm.DrmSessionManager
+import androidx.media3.exoplayer.drm.FrameworkMediaDrm
+import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
+import androidx.media3.exoplayer.drm.LocalMediaDrmCallback
+import androidx.media3.exoplayer.drm.MediaDrmCallback
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
-import kotlinx.coroutines.*
+import kotlinx.coroutines.delay
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.focus.*
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.ZoomOutMap
+
 
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
@@ -65,9 +73,9 @@ class PlayerActivity : AppCompatActivity() {
     var trackSelector: DefaultTrackSelector? = null
     private var currentQuality: QualityOption? = null
 
+
     private val fullscreenHandler = Handler(Looper.getMainLooper())
     private var isActivityVisible = false
-    private val playerScope = CoroutineScope(Dispatchers.Main + Job())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,168 +121,19 @@ class PlayerActivity : AppCompatActivity() {
             return
         }
 
-        // Jika URL diduga playlist, lakukan fetching dan parsing terlebih dahulu
-        if (isPlaylist(videoUrl!!)) {
-            // Tampilkan loading sementara
-            setContent {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = Color.White)
-                }
-            }
-
-            playerScope.launch {
-                val playlistData = fetchAndParsePlaylist(videoUrl!!, headers)
-                if (playlistData != null && isActivityVisible) {
-                    // Update URL dan headers dengan hasil parsing
-                    videoUrl = playlistData.streamUrl
-                    val newHeaders = headers.toMutableMap()
-                    newHeaders.putAll(playlistData.headers)
-                    playlistData.drmType?.let { newHeaders["drm_type"] = it }
-                    playlistData.drmKey?.let { newHeaders["drm_key"] = it }
-                    headers = newHeaders
-
-                    // Set tampilan pemutar
-                    setContent {
-                        CustomPlayerScreen(
-                            videoUrl = videoUrl!!,
-                            channelName = channelName!!,
-                            headers = headers,
-                            onPlayerReady = { player -> exoPlayer = player },
-                            onError = { error ->
-                                Toast.makeText(this@PlayerActivity, "Error: $error", Toast.LENGTH_LONG).show()
-                            },
-                            onQualityClick = { showQualityDialog() },
-                            onExitClick = { finish() }
-                        )
-                    }
-                } else {
-                    Toast.makeText(this@PlayerActivity, "Gagal memuat playlist", Toast.LENGTH_LONG).show()
-                    finish()
-                }
-            }
-        } else {
-            // Langsung mainkan jika bukan playlist
-            setContent {
-                CustomPlayerScreen(
-                    videoUrl = videoUrl!!,
-                    channelName = channelName!!,
-                    headers = headers,
-                    onPlayerReady = { player -> exoPlayer = player },
-                    onError = { error ->
-                        Toast.makeText(this@PlayerActivity, "Error: $error", Toast.LENGTH_LONG).show()
-                    },
-                    onQualityClick = { showQualityDialog() },
-                    onExitClick = { finish() }
-                )
-            }
+        setContent {
+            CustomPlayerScreen(
+                videoUrl = videoUrl!!,
+                channelName = channelName!!,
+                headers = headers,
+                onPlayerReady = { player -> exoPlayer = player },
+                onError = { error ->
+                    Toast.makeText(this@PlayerActivity, "Error: $error", Toast.LENGTH_LONG).show()
+                },
+                onQualityClick = { showQualityDialog() },
+                onExitClick = { finish() }
+            )
         }
-    }
-
-    /**
-     * Memeriksa apakah URL mengarah ke file playlist berdasarkan ekstensi atau kata kunci.
-     */
-    private fun isPlaylist(url: String): Boolean {
-        val lower = url.lowercase()
-        return lower.endsWith(".m3u") || lower.endsWith(".m3u8") || lower.contains("playlist")
-    }
-
-    /**
-     * Data class hasil parsing playlist.
-     */
-    private data class PlaylistData(
-        val streamUrl: String,
-        val headers: Map<String, String>,
-        val drmType: String?,
-        val drmKey: String?
-    )
-
-    /**
-     * Mengambil dan memparse playlist M3U dari URL.
-     */
-    private suspend fun fetchAndParsePlaylist(playlistUrl: String, initialHeaders: Map<String, String>): PlaylistData? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val url = URL(playlistUrl)
-                val connection = url.openConnection() as HttpURLConnection
-                initialHeaders.forEach { (key, value) ->
-                    connection.setRequestProperty(key, value)
-                }
-                connection.connectTimeout = 15000
-                connection.readTimeout = 15000
-                connection.instanceFollowRedirects = true
-
-                val inputStream = connection.inputStream
-                val content = inputStream.bufferedReader().use { it.readText() }
-                connection.disconnect()
-
-                parseM3U(content, playlistUrl)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
-        }
-    }
-
-    /**
-     * Memparse konten M3U dan mengekstrak URL stream, header, serta info DRM.
-     */
-    private fun parseM3U(content: String, baseUrl: String): PlaylistData {
-        val lines = content.lines()
-        var streamUrl: String? = null
-        val headers = mutableMapOf<String, String>()
-        var drmType: String? = null
-        var drmKey: String? = null
-
-        for (line in lines) {
-            val trimmed = line.trim()
-            when {
-                trimmed.startsWith("#KODIPROP:") -> {
-                    val prop = trimmed.substringAfter("#KODIPROP:").trim()
-                    when {
-                        prop.startsWith("inputstream.adaptive.license_type=") -> {
-                            drmType = prop.substringAfter("=").trim()
-                        }
-                        prop.startsWith("inputstream.adaptive.license_key=") -> {
-                            drmKey = prop.substringAfter("=").trim()
-                        }
-                    }
-                }
-                trimmed.startsWith("#EXTVLCOPT:") -> {
-                    val opt = trimmed.substringAfter("#EXTVLCOPT:").trim()
-                    val (key, value) = opt.split("=", limit = 2).map { it.trim() }
-                    when (key.lowercase()) {
-                        "http-referrer" -> headers["Referer"] = value
-                        "http-user-agent" -> headers["User-Agent"] = value
-                        else -> headers[key] = value
-                    }
-                }
-                !trimmed.startsWith("#") && trimmed.isNotBlank() -> {
-                    // Baris ini adalah URL stream
-                    streamUrl = if (trimmed.startsWith("http")) {
-                        trimmed
-                    } else {
-                        // URL relatif terhadap base URL
-                        val base = baseUrl.substringBeforeLast('/')
-                        "$base/$trimmed"
-                    }
-                }
-            }
-        }
-
-        // Jika tidak ditemukan URL, gunakan URL playlist sebagai fallback
-        val finalStreamUrl = streamUrl ?: baseUrl
-
-        return PlaylistData(
-            streamUrl = finalStreamUrl,
-            headers = headers,
-            drmType = drmType,
-            drmKey = drmKey
-        )
     }
 
     private fun forceHideSystemUI() {
@@ -297,8 +156,8 @@ class PlayerActivity : AppCompatActivity() {
             window.decorView.systemUiVisibility = uiOptions
             window.statusBarColor = android.graphics.Color.TRANSPARENT
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
+
         } catch (e: Exception) {
-            // Abaikan
         }
     }
 
@@ -309,7 +168,7 @@ class PlayerActivity : AppCompatActivity() {
             true
         } catch (e: Exception) {
             androidx.appcompat.app.AlertDialog.Builder(this).apply {
-                title = "Playback Error"
+                setTitle("Playback Error")
                 setMessage("Device tidak support Widevine DRM")
                 setCancelable(false)
                 setPositiveButton("OK") { _, _ -> finish() }
@@ -331,8 +190,16 @@ class PlayerActivity : AppCompatActivity() {
                 }
             )
 
-            dialog.setOnShowListener { forceHideSystemUI() }
-            dialog.setOnDismissListener { forceHideSystemUI() }
+            dialog.setOnShowListener {
+                forceHideSystemUI()
+            }
+
+            dialog.setOnDismissListener {
+                forceHideSystemUI()
+                if (isActivityVisible) {
+                }
+            }
+
             dialog.show()
         }
     }
@@ -356,7 +223,9 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) forceHideSystemUI()
+        if (hasFocus) {
+            forceHideSystemUI()
+        }
     }
 
     override fun onUserInteraction() {
@@ -367,7 +236,6 @@ class PlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         isActivityVisible = false
-        playerScope.cancel() // Batalkan coroutine jika masih berjalan
         exoPlayer?.release()
     }
 
@@ -377,8 +245,6 @@ class PlayerActivity : AppCompatActivity() {
         finish()
     }
 }
-
-// ===================== Bagian Composable dan fungsi pembantu =====================
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -405,7 +271,10 @@ fun CustomPlayerScreen(
     val focusRequester = remember { FocusRequester() }
     val playButtonFocusRequester = remember { FocusRequester() }
 
-    val updateInteractionTimestamp = { interactionTimestamp = System.currentTimeMillis() }
+    val updateInteractionTimestamp = {
+        interactionTimestamp = System.currentTimeMillis()
+    }
+
     val showControlsAndUpdateTime = {
         showControls = true
         updateInteractionTimestamp()
@@ -418,7 +287,6 @@ fun CustomPlayerScreen(
         try {
             focusRequester.requestFocus()
         } catch (e: Exception) {
-            // Abaikan
         }
     }
 
@@ -576,6 +444,7 @@ fun CustomPlayerScreen(
             },
             modifier = Modifier.fillMaxSize(),
             update = { playerView ->
+                // Update aspect ratio ketika state berubah
                 playerView.resizeMode = aspectRatioMode
             }
         )
@@ -585,7 +454,9 @@ fun CustomPlayerScreen(
                 modifier = Modifier.fillMaxSize(),
                 exoPlayer = exoPlayer,
                 aspectRatioMode = aspectRatioMode,
-                onAspectRatioChange = { newMode -> aspectRatioMode = newMode },
+                onAspectRatioChange = { newMode ->
+                    aspectRatioMode = newMode
+                },
                 currentPosition = currentPosition,
                 duration = duration,
                 isPlaying = isPlaying,
@@ -609,7 +480,9 @@ fun CustomPlayerScreen(
                         if (player.isPlaying) player.pause() else player.play()
                     }
                 },
-                onSeekTo = { position -> exoPlayer?.seekTo(position) },
+                onSeekTo = { position ->
+                    exoPlayer?.seekTo(position)
+                },
                 onInteraction = updateInteractionTimestamp
             )
         }
@@ -654,9 +527,13 @@ fun CustomPlayerScreen(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f))
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.Black.copy(alpha = 0.7f)
+                )
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
                     Text(
                         text = channelName,
                         color = Color.White,
@@ -703,12 +580,20 @@ fun XmlBasedControlOverlay(
     onSeekTo: (Long) -> Unit,
     onInteraction: () -> Unit = {}
 ) {
-    Box(modifier = modifier.focusGroup()) {
+    Box(
+        modifier = modifier
+            .focusGroup()
+    ) {
+        var interactionTimestamp by remember { mutableStateOf(System.currentTimeMillis()) }
         if (!isLocked) {
             val interactionSource = remember { MutableInteractionSource() }
             val isFocused by interactionSource.collectIsFocusedAsState()
 
-            LaunchedEffect(isFocused) { if (isFocused) onInteraction() }
+            LaunchedEffect(isFocused) {
+                if (isFocused) {
+                    onInteraction()
+                }
+            }
 
             IconButton(
                 onClick = onExitClick,
@@ -728,7 +613,11 @@ fun XmlBasedControlOverlay(
                         } else false
                     }
             ) {
-                Icon(Icons.Default.Close, contentDescription = "Exit", tint = Color.White)
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Exit",
+                    tint = Color.White
+                )
             }
         }
 
@@ -738,7 +627,9 @@ fun XmlBasedControlOverlay(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 80.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.Black.copy(alpha = 0.8f)
+                ),
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Row(
@@ -753,10 +644,12 @@ fun XmlBasedControlOverlay(
                         fontSize = 14.sp,
                         modifier = Modifier.padding(end = 10.dp)
                     )
+
                     Slider(
                         value = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f,
                         onValueChange = { value ->
-                            onSeekTo((value * duration).toLong())
+                            val newPosition = (value * duration).toLong()
+                            onSeekTo(newPosition)
                             onInteraction()
                         },
                         modifier = Modifier.weight(1f),
@@ -766,6 +659,7 @@ fun XmlBasedControlOverlay(
                             inactiveTrackColor = Color.Gray
                         )
                     )
+
                     Text(
                         text = formatTime(duration),
                         color = Color(0xFFBEBEBE),
@@ -784,17 +678,27 @@ fun XmlBasedControlOverlay(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Tombol Previous
                 val prevSource = remember { MutableInteractionSource() }
                 val prevFocused by prevSource.collectIsFocusedAsState()
-                LaunchedEffect(prevFocused) { if (prevFocused) onInteraction() }
+
+                LaunchedEffect(prevFocused) {
+                    if (prevFocused) {
+                        onInteraction()
+                    }
+                }
+
                 IconButton(
-                    onClick = { onPreviousClick(); onInteraction() },
+                    onClick = {
+                        onPreviousClick()
+                        onInteraction()
+                    },
                     modifier = Modifier
                         .focusable(interactionSource = prevSource)
                         .onKeyEvent {
                             if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onPreviousClick(); onInteraction(); true
+                                onPreviousClick()
+                                onInteraction()
+                                true
                             } else false
                         }
                         .border(
@@ -803,20 +707,34 @@ fun XmlBasedControlOverlay(
                             shape = RoundedCornerShape(50)
                         )
                 ) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = Color.White)
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "Previous",
+                        tint = Color.White
+                    )
                 }
 
-                // Tombol Rewind
                 val rewindSource = remember { MutableInteractionSource() }
                 val rewindFocused by rewindSource.collectIsFocusedAsState()
-                LaunchedEffect(rewindFocused) { if (rewindFocused) onInteraction() }
+
+                LaunchedEffect(rewindFocused) {
+                    if (rewindFocused) {
+                        onInteraction()
+                    }
+                }
+
                 IconButton(
-                    onClick = { onRewindClick(); onInteraction() },
+                    onClick = {
+                        onRewindClick()
+                        onInteraction()
+                    },
                     modifier = Modifier
                         .focusable(interactionSource = rewindSource)
                         .onKeyEvent {
                             if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onRewindClick(); onInteraction(); true
+                                onRewindClick()
+                                onInteraction()
+                                true
                             } else false
                         }
                         .border(
@@ -825,21 +743,35 @@ fun XmlBasedControlOverlay(
                             shape = RoundedCornerShape(50)
                         )
                 ) {
-                    Icon(Icons.Default.FastRewind, contentDescription = "Rewind", tint = Color.White)
+                    Icon(
+                        imageVector = Icons.Default.FastRewind,
+                        contentDescription = "Rewind",
+                        tint = Color.White
+                    )
                 }
 
-                // Tombol Play/Pause
                 val playSource = remember { MutableInteractionSource() }
                 val playFocused by playSource.collectIsFocusedAsState()
-                LaunchedEffect(playFocused) { if (playFocused) onInteraction() }
+
+                LaunchedEffect(playFocused) {
+                    if (playFocused) {
+                        onInteraction()
+                    }
+                }
+
                 IconButton(
-                    onClick = { onPlayPauseClick(); onInteraction() },
+                    onClick = {
+                        onPlayPauseClick()
+                        onInteraction()
+                    },
                     modifier = Modifier
                         .focusRequester(playButtonFocusRequester)
                         .focusable(interactionSource = playSource)
                         .onKeyEvent {
                             if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onPlayPauseClick(); onInteraction(); true
+                                onPlayPauseClick()
+                                onInteraction()
+                                true
                             } else false
                         }
                         .border(
@@ -849,23 +781,33 @@ fun XmlBasedControlOverlay(
                         )
                 ) {
                     Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = "Play/Pause",
                         tint = Color.White
                     )
                 }
 
-                // Tombol Forward
                 val forwardSource = remember { MutableInteractionSource() }
                 val forwardFocused by forwardSource.collectIsFocusedAsState()
-                LaunchedEffect(forwardFocused) { if (forwardFocused) onInteraction() }
+
+                LaunchedEffect(forwardFocused) {
+                    if (forwardFocused) {
+                        onInteraction()
+                    }
+                }
+
                 IconButton(
-                    onClick = { onForwardClick(); onInteraction() },
+                    onClick = {
+                        onForwardClick()
+                        onInteraction()
+                    },
                     modifier = Modifier
                         .focusable(interactionSource = forwardSource)
                         .onKeyEvent {
                             if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onForwardClick(); onInteraction(); true
+                                onForwardClick()
+                                onInteraction()
+                                true
                             } else false
                         }
                         .border(
@@ -874,20 +816,34 @@ fun XmlBasedControlOverlay(
                             shape = RoundedCornerShape(50)
                         )
                 ) {
-                    Icon(Icons.Default.FastForward, contentDescription = "Forward", tint = Color.White)
+                    Icon(
+                        imageVector = Icons.Default.FastForward,
+                        contentDescription = "Forward",
+                        tint = Color.White
+                    )
                 }
 
-                // Tombol Next
                 val nextSource = remember { MutableInteractionSource() }
                 val nextFocused by nextSource.collectIsFocusedAsState()
-                LaunchedEffect(nextFocused) { if (nextFocused) onInteraction() }
+
+                LaunchedEffect(nextFocused) {
+                    if (nextFocused) {
+                        onInteraction()
+                    }
+                }
+
                 IconButton(
-                    onClick = { onNextClick(); onInteraction() },
+                    onClick = {
+                        onNextClick()
+                        onInteraction()
+                    },
                     modifier = Modifier
                         .focusable(interactionSource = nextSource)
                         .onKeyEvent {
                             if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onNextClick(); onInteraction(); true
+                                onNextClick()
+                                onInteraction()
+                                true
                             } else false
                         }
                         .border(
@@ -896,7 +852,11 @@ fun XmlBasedControlOverlay(
                             shape = RoundedCornerShape(50)
                         )
                 ) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White)
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "Next",
+                        tint = Color.White
+                    )
                 }
             }
         }
@@ -904,11 +864,21 @@ fun XmlBasedControlOverlay(
         if (!isLocked) {
             val screenSource = remember { MutableInteractionSource() }
             val qualitySource = remember { MutableInteractionSource() }
+
             val isScreenFocused by screenSource.collectIsFocusedAsState()
             val isQualityFocused by qualitySource.collectIsFocusedAsState()
 
-            LaunchedEffect(isScreenFocused) { if (isScreenFocused) onInteraction() }
-            LaunchedEffect(isQualityFocused) { if (isQualityFocused) onInteraction() }
+            LaunchedEffect(isScreenFocused) {
+                if (isScreenFocused) {
+                    onInteraction()
+                }
+            }
+
+            LaunchedEffect(isQualityFocused) {
+                if (isQualityFocused) {
+                    onInteraction()
+                }
+            }
 
             Row(
                 modifier = Modifier
@@ -936,7 +906,7 @@ fun XmlBasedControlOverlay(
                         )
                 ) {
                     Icon(
-                        when (aspectRatioMode) {
+                        imageVector = when (aspectRatioMode) {
                             AspectRatioFrameLayout.RESIZE_MODE_FILL -> Icons.Default.Fullscreen
                             AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> Icons.Default.ZoomOutMap
                             else -> Icons.Default.AspectRatio
@@ -946,7 +916,10 @@ fun XmlBasedControlOverlay(
                     )
                 }
                 IconButton(
-                    onClick = { onQualityClick(); onInteraction() },
+                    onClick = {
+                        onQualityClick()
+                        onInteraction()
+                    },
                     modifier = Modifier
                         .focusable(interactionSource = qualitySource)
                         .border(
@@ -955,17 +928,29 @@ fun XmlBasedControlOverlay(
                             shape = RoundedCornerShape(50)
                         )
                 ) {
-                    Icon(Icons.Default.Settings, contentDescription = "Track Selection", tint = Color.White)
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Track Selection",
+                        tint = Color.White
+                    )
                 }
             }
         }
 
-        // Tombol Lock
         val lockSource = remember { MutableInteractionSource() }
         val isLockFocused by lockSource.collectIsFocusedAsState()
-        LaunchedEffect(isLockFocused) { if (isLockFocused) onInteraction() }
+
+        LaunchedEffect(isLockFocused) {
+            if (isLockFocused) {
+                onInteraction()
+            }
+        }
+
         IconButton(
-            onClick = { onLockToggle(); onInteraction() },
+            onClick = {
+                onLockToggle()
+                onInteraction()
+            },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
@@ -977,7 +962,7 @@ fun XmlBasedControlOverlay(
                 )
         ) {
             Icon(
-                if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
                 contentDescription = "Lock/Unlock Controls",
                 tint = Color.White
             )
@@ -989,6 +974,7 @@ fun formatTime(timeMs: Long): String {
     val seconds = timeMs / 1000
     val minutes = seconds / 60
     val hours = minutes / 60
+
     return when {
         hours > 0 -> String.format("%d:%02d:%02d", hours, minutes % 60, seconds % 60)
         else -> String.format("%d:%02d", minutes, seconds % 60)
@@ -1012,13 +998,14 @@ private fun createSimplePlayerView(
 
     val playerView = PlayerView(context).apply {
         useController = false
-        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT // Default mode
         setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
         setBackgroundColor(android.graphics.Color.BLACK)
         layoutParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         )
+        setPadding(0, 0, 0, 0)
     }
 
     val requestProperties = mutableMapOf<String, String>()
@@ -1038,6 +1025,7 @@ private fun createSimplePlayerView(
     val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
     val drmSessionManager = createDrmSessionManager(context, headers, httpDataSourceFactory)
+
 
     val mediaSourceFactory = when {
         headers["manifest_type"]?.lowercase() == "dash" -> {
@@ -1117,12 +1105,14 @@ private fun createDrmSessionManager(
     return try {
         val mediaDrmCallback: MediaDrmCallback = when {
             drmType.lowercase().contains("clearkey") -> {
+
                 val clearkeyData = when {
                     drmLicense.startsWith("data:application/json;base64,") -> {
                         val base64Data = drmLicense.removePrefix("data:application/json;base64,")
                         try {
                             val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
                             val decoded = String(decodedBytes, Charsets.UTF_8).trim()
+
                             processAndFixClearkeyJson(decoded)
                         } catch (e: Exception) {
                             return DrmSessionManager.DRM_UNSUPPORTED
@@ -1143,10 +1133,13 @@ private fun createDrmSessionManager(
                 }
 
                 if (clearkeyData is String) {
+
                     if (!clearkeyData.contains("keys") || !clearkeyData.contains("kid")) {
                         return DrmSessionManager.DRM_UNSUPPORTED
                     }
-                    LocalMediaDrmCallback(clearkeyData.toByteArray(Charsets.UTF_8))
+
+                    val cleanJson = clearkeyData.trim()
+                    LocalMediaDrmCallback(cleanJson.toByteArray(Charsets.UTF_8))
                 } else {
                     clearkeyData as MediaDrmCallback
                 }
@@ -1156,13 +1149,17 @@ private fun createDrmSessionManager(
                 if (context is PlayerActivity && !context.isDrmWidevineSupported()) {
                     return DrmSessionManager.DRM_UNSUPPORTED
                 }
+
                 val callback = HttpMediaDrmCallback(drmLicense, httpDataSourceFactory)
+
                 headers["drm_token"]?.let { token ->
                     callback.setKeyRequestProperty("Authorization", "Bearer $token")
                 }
+
                 headers["authorization"]?.let { auth ->
                     callback.setKeyRequestProperty("Authorization", auth)
                 }
+
                 callback
             }
 
@@ -1175,7 +1172,9 @@ private fun createDrmSessionManager(
             drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
             drmType.lowercase().contains("widevine") -> C.WIDEVINE_UUID
             drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
-            else -> return DrmSessionManager.DRM_UNSUPPORTED
+            else -> {
+                return DrmSessionManager.DRM_UNSUPPORTED
+            }
         }
 
         val sessionManager = DefaultDrmSessionManager.Builder()
@@ -1191,6 +1190,7 @@ private fun createDrmSessionManager(
 
 private fun processAndFixClearkeyJson(jsonString: String): String {
     return try {
+
         val jsonObj = JSONObject(jsonString)
         val keysArray = jsonObj.getJSONArray("keys")
 
@@ -1227,7 +1227,10 @@ private fun processAndFixClearkeyJson(jsonString: String): String {
 
         val cleanedJson = JSONObject()
         cleanedJson.put("keys", keysArray)
-        cleanedJson.toString().trim()
+
+        val result = cleanedJson.toString().trim()
+        result
+
     } catch (e: Exception) {
         jsonString
     }
@@ -1244,7 +1247,9 @@ private fun convertToUrlSafeBase64(base64String: String): String {
 private fun convertHexToJson(kidKeyHex: String): String {
     return try {
         val parts = kidKeyHex.split(":")
-        if (parts.size != 2) return "{}"
+        if (parts.size != 2) {
+            return "{}"
+        }
 
         val kidHex = parts[0].trim()
         val keyHex = parts[1].trim()
@@ -1255,7 +1260,10 @@ private fun convertHexToJson(kidKeyHex: String): String {
         val kidBase64 = android.util.Base64.encodeToString(kidBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
         val keyBase64 = android.util.Base64.encodeToString(keyBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
 
-        """{"keys":[{"kty":"oct","k":"$keyBase64","kid":"$kidBase64"}]}"""
+        val clearkeyJson = """{"keys":[{"kty":"oct","k":"$keyBase64","kid":"$kidBase64"}]}"""
+
+        clearkeyJson
+
     } catch (e: Exception) {
         "{}"
     }
@@ -1267,12 +1275,14 @@ private fun createMediaItemWithDrm(
     headers: Map<String, String>,
     context: android.content.Context
 ): MediaItem {
+
     val drmType = headers["drm_type"]
     val drmLicense = headers["drm_key"] ?: headers["license_url"]
 
     var mediaItem = MediaItem.fromUri(Uri.parse(videoUrl))
 
     if (!drmType.isNullOrEmpty() && !drmLicense.isNullOrEmpty()) {
+
         try {
             val drmSchemeUuid = when {
                 drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
@@ -1283,7 +1293,9 @@ private fun createMediaItemWithDrm(
                     C.WIDEVINE_UUID
                 }
                 drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
-                else -> return mediaItem
+                else -> {
+                    return mediaItem
+                }
             }
 
             val drmConfigBuilder = MediaItem.DrmConfiguration.Builder(drmSchemeUuid)
@@ -1294,8 +1306,8 @@ private fun createMediaItemWithDrm(
                         drmConfigBuilder
                             .setLicenseUri(drmLicense)
                             .setForceDefaultLicenseUri(true)
+                    } else {
                     }
-                    // Jika embedded (JSON), tidak perlu setLicenseUri
                 }
                 drmType.lowercase().contains("widevine") -> {
                     drmConfigBuilder
@@ -1314,8 +1326,9 @@ private fun createMediaItemWithDrm(
                 .setUri(Uri.parse(videoUrl))
                 .setDrmConfiguration(drmConfigBuilder.build())
                 .build()
+
         } catch (e: Exception) {
-            // Fallback ke tanpa DRM
+            mediaItem = MediaItem.fromUri(Uri.parse(videoUrl))
         }
     }
 
