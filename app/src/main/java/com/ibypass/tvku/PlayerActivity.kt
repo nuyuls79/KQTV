@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -33,6 +34,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.focus.*
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -43,8 +47,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.dash.DashMediaSource
-import androidx.media3.ui.PlayerView
-import androidx.media3.common.C
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkMediaDrm
@@ -53,15 +55,13 @@ import androidx.media3.exoplayer.drm.LocalMediaDrmCallback
 import androidx.media3.exoplayer.drm.MediaDrmCallback
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.ui.PlayerView
+import androidx.media3.common.C
 import androidx.media3.ui.AspectRatioFrameLayout
 import kotlinx.coroutines.delay
+import org.json.JSONArray
 import org.json.JSONObject
-import androidx.compose.ui.input.key.*
-import androidx.compose.ui.focus.*
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.ZoomOutMap
-
+import java.util.UUID
 
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
@@ -73,14 +73,18 @@ class PlayerActivity : AppCompatActivity() {
     var trackSelector: DefaultTrackSelector? = null
     private var currentQuality: QualityOption? = null
 
-
     private val fullscreenHandler = Handler(Looper.getMainLooper())
     private var isActivityVisible = false
+
+    companion object {
+        private const val TAG = "PlayerActivity"
+        // ClearKey UUID standar
+        private val CLEARKEY_UUID = UUID.fromString("e2719d58-a985-b3c9-781a-b030af78d30e")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // PERBAIKAN DRM 1: Tambahkan FLAG_SECURE agar sistem mengizinkan rendering konten terlindungi
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         
         if (!VpnHelper.isNetworkSecure(this)) {
@@ -113,11 +117,29 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
         }
+
+        intent.getStringExtra("drm_key")?.let {
+            headerMap["drm_key"] = it
+            Log.d(TAG, "DRM Key from extras: ${it.take(20)}...")
+        }
+        intent.getStringExtra("drm_type")?.let {
+            headerMap["drm_type"] = it
+            Log.d(TAG, "DRM Type from extras: $it")
+        }
+        intent.getStringExtra("manifest_type")?.let {
+            headerMap["manifest_type"] = it
+        }
+
         val secureHeaders = VpnHelper.generateSecureHeaders(this)
         val combinedHeaders = mutableMapOf<String, String>()
         combinedHeaders.putAll(secureHeaders)
         combinedHeaders.putAll(headerMap)
         headers = combinedHeaders
+
+        Log.d(TAG, "Final headers keys: ${headers.keys}")
+        Log.d(TAG, "DRM Key present: ${headers.containsKey("drm_key")}")
+        Log.d(TAG, "DRM Type: ${headers["drm_type"]}")
+        Log.d(TAG, "Video URL: $videoUrl")
 
         if (videoUrl.isNullOrEmpty()) {
             Toast.makeText(this, "URL tidak valid", Toast.LENGTH_SHORT).show()
@@ -132,6 +154,7 @@ class PlayerActivity : AppCompatActivity() {
                 headers = headers,
                 onPlayerReady = { player -> exoPlayer = player },
                 onError = { error ->
+                    Log.e(TAG, "Player Error: $error")
                     Toast.makeText(this@PlayerActivity, "Error: $error", Toast.LENGTH_LONG).show()
                 },
                 onQualityClick = { showQualityDialog() },
@@ -143,7 +166,6 @@ class PlayerActivity : AppCompatActivity() {
     private fun forceHideSystemUI() {
         try {
             supportActionBar?.hide()
-
             window.setFlags(
                 WindowManager.LayoutParams.FLAG_FULLSCREEN,
                 WindowManager.LayoutParams.FLAG_FULLSCREEN
@@ -162,6 +184,7 @@ class PlayerActivity : AppCompatActivity() {
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
 
         } catch (e: Exception) {
+            Log.e(TAG, "Error hiding system UI", e)
         }
     }
 
@@ -194,16 +217,8 @@ class PlayerActivity : AppCompatActivity() {
                 }
             )
 
-            dialog.setOnShowListener {
-                forceHideSystemUI()
-            }
-
-            dialog.setOnDismissListener {
-                forceHideSystemUI()
-                if (isActivityVisible) {
-                }
-            }
-
+            dialog.setOnShowListener { forceHideSystemUI() }
+            dialog.setOnDismissListener { forceHideSystemUI() }
             dialog.show()
         }
     }
@@ -227,9 +242,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            forceHideSystemUI()
-        }
+        if (hasFocus) forceHideSystemUI()
     }
 
     override fun onUserInteraction() {
@@ -275,10 +288,7 @@ fun CustomPlayerScreen(
     val focusRequester = remember { FocusRequester() }
     val playButtonFocusRequester = remember { FocusRequester() }
 
-    val updateInteractionTimestamp = {
-        interactionTimestamp = System.currentTimeMillis()
-    }
-
+    val updateInteractionTimestamp = { interactionTimestamp = System.currentTimeMillis() }
     val showControlsAndUpdateTime = {
         showControls = true
         updateInteractionTimestamp()
@@ -288,20 +298,13 @@ fun CustomPlayerScreen(
         delay(3000)
         showChannelInfo = false
         delay(500)
-        try {
-            focusRequester.requestFocus()
-        } catch (e: Exception) {
-        }
+        try { focusRequester.requestFocus() } catch (e: Exception) { }
     }
 
     LaunchedEffect(showControls) {
         if (showControls && !isLocked) {
             delay(100)
-            try {
-                playButtonFocusRequester.requestFocus()
-            } catch (e: Exception) {
-                focusRequester.requestFocus()
-            }
+            try { playButtonFocusRequester.requestFocus() } catch (e: Exception) { focusRequester.requestFocus() }
         }
     }
 
@@ -309,9 +312,7 @@ fun CustomPlayerScreen(
         if (!isLocked && showControls) {
             delay(5000)
             val currentTime = System.currentTimeMillis()
-            if (currentTime - interactionTimestamp >= 4800) {
-                showControls = false
-            }
+            if (currentTime - interactionTimestamp >= 4800) showControls = false
         }
     }
 
@@ -337,91 +338,52 @@ fun CustomPlayerScreen(
                     when {
                         !showControls && !isLocked -> {
                             when (keyEvent.key) {
-                                Key.DirectionUp, Key.DirectionDown,
-                                Key.DirectionLeft, Key.DirectionRight,
-                                Key.Enter, Key.Spacebar -> {
-                                    showControlsAndUpdateTime()
-                                    true
-                                }
+                                Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight,
+                                Key.Enter, Key.Spacebar -> { showControlsAndUpdateTime(); true }
                                 Key.MediaPlay, Key.MediaPause, Key.MediaPlayPause -> {
-                                    exoPlayer?.let { player ->
-                                        if (player.isPlaying) player.pause() else player.play()
-                                    }
-                                    showControlsAndUpdateTime()
-                                    true
+                                    exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
+                                    showControlsAndUpdateTime(); true
                                 }
                                 Key.MediaFastForward -> {
-                                    exoPlayer?.let { player ->
-                                        player.seekTo(minOf(player.duration, player.currentPosition + 10000))
-                                    }
-                                    showControlsAndUpdateTime()
-                                    true
+                                    exoPlayer?.let { it.seekTo(minOf(it.duration, it.currentPosition + 10000)) }
+                                    showControlsAndUpdateTime(); true
                                 }
                                 Key.MediaRewind -> {
                                     exoPlayer?.seekTo(maxOf(0, (exoPlayer?.currentPosition ?: 0) - 10000))
-                                    showControlsAndUpdateTime()
-                                    true
+                                    showControlsAndUpdateTime(); true
                                 }
-                                Key.Back -> {
-                                    onExitClick()
-                                    true
-                                }
-                                else -> {
-                                    showControlsAndUpdateTime()
-                                    true
-                                }
+                                Key.Back -> { onExitClick(); true }
+                                else -> { showControlsAndUpdateTime(); true }
                             }
                         }
                         showControls && !isLocked -> {
                             when (keyEvent.key) {
                                 Key.MediaPlay, Key.MediaPause, Key.MediaPlayPause -> {
-                                    exoPlayer?.let { player ->
-                                        if (player.isPlaying) player.pause() else player.play()
-                                    }
-                                    updateInteractionTimestamp()
-                                    true
+                                    exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
+                                    updateInteractionTimestamp(); true
                                 }
                                 Key.MediaFastForward -> {
-                                    exoPlayer?.let { player ->
-                                        player.seekTo(minOf(player.duration, player.currentPosition + 10000))
-                                    }
-                                    updateInteractionTimestamp()
-                                    true
+                                    exoPlayer?.let { it.seekTo(minOf(it.duration, it.currentPosition + 10000)) }
+                                    updateInteractionTimestamp(); true
                                 }
                                 Key.MediaRewind -> {
                                     exoPlayer?.seekTo(maxOf(0, (exoPlayer?.currentPosition ?: 0) - 10000))
-                                    updateInteractionTimestamp()
-                                    true
+                                    updateInteractionTimestamp(); true
                                 }
-                                Key.Back -> {
-                                    onExitClick()
-                                    true
-                                }
-                                else -> {
-                                    updateInteractionTimestamp()
-                                    false
-                                }
+                                Key.Back -> { onExitClick(); true }
+                                else -> { updateInteractionTimestamp(); false }
                             }
                         }
                         isLocked -> {
                             when (keyEvent.key) {
-                                Key.Back -> {
-                                    onExitClick()
-                                    true
-                                }
-                                Key.Enter, Key.Spacebar -> {
-                                    isLocked = false
-                                    showControlsAndUpdateTime()
-                                    true
-                                }
+                                Key.Back -> { onExitClick(); true }
+                                Key.Enter, Key.Spacebar -> { isLocked = false; showControlsAndUpdateTime(); true }
                                 else -> false
                             }
                         }
                         else -> false
                     }
-                } else {
-                    false
-                }
+                } else false
             }
             .pointerInput(isLocked) {
                 detectTapGestures {
@@ -447,10 +409,7 @@ fun CustomPlayerScreen(
                 )
             },
             modifier = Modifier.fillMaxSize(),
-            update = { playerView ->
-                // Update aspect ratio ketika state berubah
-                playerView.resizeMode = aspectRatioMode
-            }
+            update = { it.resizeMode = aspectRatioMode }
         )
 
         if (showControls && !isLoading) {
@@ -458,9 +417,7 @@ fun CustomPlayerScreen(
                 modifier = Modifier.fillMaxSize(),
                 exoPlayer = exoPlayer,
                 aspectRatioMode = aspectRatioMode,
-                onAspectRatioChange = { newMode ->
-                    aspectRatioMode = newMode
-                },
+                onAspectRatioChange = { aspectRatioMode = it },
                 currentPosition = currentPosition,
                 duration = duration,
                 isPlaying = isPlaying,
@@ -471,84 +428,45 @@ fun CustomPlayerScreen(
                 onLockToggle = { isLocked = !isLocked },
                 onPreviousClick = { },
                 onNextClick = { },
-                onRewindClick = {
-                    exoPlayer?.seekTo(maxOf(0, (exoPlayer?.currentPosition ?: 0) - 10000))
-                },
-                onForwardClick = {
-                    exoPlayer?.let { player ->
-                        player.seekTo(minOf(player.duration, player.currentPosition + 10000))
-                    }
-                },
-                onPlayPauseClick = {
-                    exoPlayer?.let { player ->
-                        if (player.isPlaying) player.pause() else player.play()
-                    }
-                },
-                onSeekTo = { position ->
-                    exoPlayer?.seekTo(position)
-                },
+                onRewindClick = { exoPlayer?.seekTo(maxOf(0, (exoPlayer?.currentPosition ?: 0) - 10000)) },
+                onForwardClick = { exoPlayer?.let { it.seekTo(minOf(it.duration, it.currentPosition + 10000)) } },
+                onPlayPauseClick = { exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() } },
+                onSeekTo = { exoPlayer?.seekTo(it) },
                 onInteraction = updateInteractionTimestamp
             )
         }
 
         if (isLocked) {
             IconButton(
-                onClick = {
-                    isLocked = false
-                    showControlsAndUpdateTime()
-                },
+                onClick = { isLocked = false; showControlsAndUpdateTime() },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(16.dp)
                     .focusable()
                     .onKeyEvent {
                         if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                            isLocked = false
-                            showControlsAndUpdateTime()
-                            true
+                            isLocked = false; showControlsAndUpdateTime(); true
                         } else false
                     }
             ) {
-                Icon(
-                    imageVector = Icons.Default.Lock,
-                    contentDescription = "Unlock Controls",
-                    tint = Color.White
-                )
+                Icon(imageVector = Icons.Default.Lock, contentDescription = "Unlock", tint = Color.White)
             }
         }
 
         if (isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color.White)
             }
         }
 
         if (showChannelInfo) {
             Card(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color.Black.copy(alpha = 0.7f)
-                )
+                modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f))
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = channelName,
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "📺 Live Stream",
-                        color = Color.Cyan,
-                        fontSize = 14.sp
-                    )
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(text = channelName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(text = "📺 Live Stream", color = Color.Cyan, fontSize = 14.sp)
                     if (headers.containsKey("drm_type")) {
                         Text(
                             text = "🔐 DRM Protected (${headers["drm_type"]?.uppercase()})",
@@ -584,20 +502,11 @@ fun XmlBasedControlOverlay(
     onSeekTo: (Long) -> Unit,
     onInteraction: () -> Unit = {}
 ) {
-    Box(
-        modifier = modifier
-            .focusGroup()
-    ) {
-        var interactionTimestamp by remember { mutableStateOf(System.currentTimeMillis()) }
+    Box(modifier = modifier.focusGroup()) {
         if (!isLocked) {
             val interactionSource = remember { MutableInteractionSource() }
             val isFocused by interactionSource.collectIsFocusedAsState()
-
-            LaunchedEffect(isFocused) {
-                if (isFocused) {
-                    onInteraction()
-                }
-            }
+            LaunchedEffect(isFocused) { if (isFocused) onInteraction() }
 
             IconButton(
                 onClick = onExitClick,
@@ -610,284 +519,108 @@ fun XmlBasedControlOverlay(
                         shape = RoundedCornerShape(50)
                     )
                     .focusable(interactionSource = interactionSource)
-                    .onKeyEvent {
-                        if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                            onExitClick()
-                            true
-                        } else false
-                    }
+                    .onKeyEvent { if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) { onExitClick(); true } else false }
             ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Exit",
-                    tint = Color.White
-                )
+                Icon(imageVector = Icons.Default.Close, contentDescription = "Exit", tint = Color.White)
             }
         }
 
         if (!isLocked && duration > 0) {
             Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 80.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color.Black.copy(alpha = 0.8f)
-                ),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp, vertical = 80.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = formatTime(currentPosition),
-                        color = Color(0xFFBEBEBE),
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(end = 10.dp)
-                    )
-
+                    Text(text = formatTime(currentPosition), color = Color(0xFFBEBEBE), fontSize = 14.sp, modifier = Modifier.padding(end = 10.dp))
                     Slider(
                         value = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f,
-                        onValueChange = { value ->
-                            val newPosition = (value * duration).toLong()
-                            onSeekTo(newPosition)
-                            onInteraction()
-                        },
+                        onValueChange = { onSeekTo((it * duration).toLong()); onInteraction() },
                         modifier = Modifier.weight(1f),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = Color.Red,
-                            inactiveTrackColor = Color.Gray
-                        )
+                        colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.Red, inactiveTrackColor = Color.Gray)
                     )
-
-                    Text(
-                        text = formatTime(duration),
-                        color = Color(0xFFBEBEBE),
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(start = 10.dp)
-                    )
+                    Text(text = formatTime(duration), color = Color(0xFFBEBEBE), fontSize = 14.sp, modifier = Modifier.padding(start = 10.dp))
                 }
             }
         }
 
         if (!isLocked) {
             Row(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(16.dp),
+                modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val prevSource = remember { MutableInteractionSource() }
                 val prevFocused by prevSource.collectIsFocusedAsState()
-
-                LaunchedEffect(prevFocused) {
-                    if (prevFocused) {
-                        onInteraction()
-                    }
-                }
-
+                LaunchedEffect(prevFocused) { if (prevFocused) onInteraction() }
                 IconButton(
-                    onClick = {
-                        onPreviousClick()
-                        onInteraction()
-                    },
+                    onClick = { onPreviousClick(); onInteraction() },
                     modifier = Modifier
                         .focusable(interactionSource = prevSource)
-                        .onKeyEvent {
-                            if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onPreviousClick()
-                                onInteraction()
-                                true
-                            } else false
-                        }
-                        .border(
-                            width = if (prevFocused) 2.dp else 0.dp,
-                            color = if (prevFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SkipPrevious,
-                        contentDescription = "Previous",
-                        tint = Color.White
-                    )
-                }
+                        .onKeyEvent { if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) { onPreviousClick(); onInteraction(); true } else false }
+                        .border(width = if (prevFocused) 2.dp else 0.dp, color = if (prevFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
+                ) { Icon(imageVector = Icons.Default.SkipPrevious, contentDescription = "Previous", tint = Color.White) }
 
                 val rewindSource = remember { MutableInteractionSource() }
                 val rewindFocused by rewindSource.collectIsFocusedAsState()
-
-                LaunchedEffect(rewindFocused) {
-                    if (rewindFocused) {
-                        onInteraction()
-                    }
-                }
-
+                LaunchedEffect(rewindFocused) { if (rewindFocused) onInteraction() }
                 IconButton(
-                    onClick = {
-                        onRewindClick()
-                        onInteraction()
-                    },
+                    onClick = { onRewindClick(); onInteraction() },
                     modifier = Modifier
                         .focusable(interactionSource = rewindSource)
-                        .onKeyEvent {
-                            if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onRewindClick()
-                                onInteraction()
-                                true
-                            } else false
-                        }
-                        .border(
-                            width = if (rewindFocused) 2.dp else 0.dp,
-                            color = if (rewindFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FastRewind,
-                        contentDescription = "Rewind",
-                        tint = Color.White
-                    )
-                }
+                        .onKeyEvent { if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) { onRewindClick(); onInteraction(); true } else false }
+                        .border(width = if (rewindFocused) 2.dp else 0.dp, color = if (rewindFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
+                ) { Icon(imageVector = Icons.Default.FastRewind, contentDescription = "Rewind", tint = Color.White) }
 
                 val playSource = remember { MutableInteractionSource() }
                 val playFocused by playSource.collectIsFocusedAsState()
-
-                LaunchedEffect(playFocused) {
-                    if (playFocused) {
-                        onInteraction()
-                    }
-                }
-
+                LaunchedEffect(playFocused) { if (playFocused) onInteraction() }
                 IconButton(
-                    onClick = {
-                        onPlayPauseClick()
-                        onInteraction()
-                    },
+                    onClick = { onPlayPauseClick(); onInteraction() },
                     modifier = Modifier
                         .focusRequester(playButtonFocusRequester)
                         .focusable(interactionSource = playSource)
-                        .onKeyEvent {
-                            if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onPlayPauseClick()
-                                onInteraction()
-                                true
-                            } else false
-                        }
-                        .border(
-                            width = if (playFocused) 2.dp else 0.dp,
-                            color = if (playFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
-                ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = "Play/Pause",
-                        tint = Color.White
-                    )
-                }
+                        .onKeyEvent { if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) { onPlayPauseClick(); onInteraction(); true } else false }
+                        .border(width = if (playFocused) 2.dp else 0.dp, color = if (playFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
+                ) { Icon(imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", tint = Color.White) }
 
                 val forwardSource = remember { MutableInteractionSource() }
                 val forwardFocused by forwardSource.collectIsFocusedAsState()
-
-                LaunchedEffect(forwardFocused) {
-                    if (forwardFocused) {
-                        onInteraction()
-                    }
-                }
-
+                LaunchedEffect(forwardFocused) { if (forwardFocused) onInteraction() }
                 IconButton(
-                    onClick = {
-                        onForwardClick()
-                        onInteraction()
-                    },
+                    onClick = { onForwardClick(); onInteraction() },
                     modifier = Modifier
                         .focusable(interactionSource = forwardSource)
-                        .onKeyEvent {
-                            if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onForwardClick()
-                                onInteraction()
-                                true
-                            } else false
-                        }
-                        .border(
-                            width = if (forwardFocused) 2.dp else 0.dp,
-                            color = if (forwardFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FastForward,
-                        contentDescription = "Forward",
-                        tint = Color.White
-                    )
-                }
+                        .onKeyEvent { if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) { onForwardClick(); onInteraction(); true } else false }
+                        .border(width = if (forwardFocused) 2.dp else 0.dp, color = if (forwardFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
+                ) { Icon(imageVector = Icons.Default.FastForward, contentDescription = "Forward", tint = Color.White) }
 
                 val nextSource = remember { MutableInteractionSource() }
                 val nextFocused by nextSource.collectIsFocusedAsState()
-
-                LaunchedEffect(nextFocused) {
-                    if (nextFocused) {
-                        onInteraction()
-                    }
-                }
-
+                LaunchedEffect(nextFocused) { if (nextFocused) onInteraction() }
                 IconButton(
-                    onClick = {
-                        onNextClick()
-                        onInteraction()
-                    },
+                    onClick = { onNextClick(); onInteraction() },
                     modifier = Modifier
                         .focusable(interactionSource = nextSource)
-                        .onKeyEvent {
-                            if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) {
-                                onNextClick()
-                                onInteraction()
-                                true
-                            } else false
-                        }
-                        .border(
-                            width = if (nextFocused) 2.dp else 0.dp,
-                            color = if (nextFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SkipNext,
-                        contentDescription = "Next",
-                        tint = Color.White
-                    )
-                }
+                        .onKeyEvent { if (it.type == KeyEventType.KeyUp && it.key == Key.Enter) { onNextClick(); onInteraction(); true } else false }
+                        .border(width = if (nextFocused) 2.dp else 0.dp, color = if (nextFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
+                ) { Icon(imageVector = Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White) }
             }
         }
 
         if (!isLocked) {
             val screenSource = remember { MutableInteractionSource() }
             val qualitySource = remember { MutableInteractionSource() }
-
             val isScreenFocused by screenSource.collectIsFocusedAsState()
             val isQualityFocused by qualitySource.collectIsFocusedAsState()
-
-            LaunchedEffect(isScreenFocused) {
-                if (isScreenFocused) {
-                    onInteraction()
-                }
-            }
-
-            LaunchedEffect(isQualityFocused) {
-                if (isQualityFocused) {
-                    onInteraction()
-                }
-            }
+            LaunchedEffect(isScreenFocused) { if (isScreenFocused) onInteraction() }
+            LaunchedEffect(isQualityFocused) { if (isQualityFocused) onInteraction() }
 
             Row(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 72.dp, bottom = 16.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 72.dp, bottom = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -898,16 +631,11 @@ fun XmlBasedControlOverlay(
                             AspectRatioFrameLayout.RESIZE_MODE_FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                             else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                         }
-                        onAspectRatioChange(newMode)
-                        onInteraction()
+                        onAspectRatioChange(newMode); onInteraction()
                     },
                     modifier = Modifier
                         .focusable(interactionSource = screenSource)
-                        .border(
-                            width = if (isScreenFocused) 2.dp else 0.dp,
-                            color = if (isScreenFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
+                        .border(width = if (isScreenFocused) 2.dp else 0.dp, color = if (isScreenFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
                 ) {
                     Icon(
                         imageVector = when (aspectRatioMode) {
@@ -920,57 +648,25 @@ fun XmlBasedControlOverlay(
                     )
                 }
                 IconButton(
-                    onClick = {
-                        onQualityClick()
-                        onInteraction()
-                    },
+                    onClick = { onQualityClick(); onInteraction() },
                     modifier = Modifier
                         .focusable(interactionSource = qualitySource)
-                        .border(
-                            width = if (isQualityFocused) 2.dp else 0.dp,
-                            color = if (isQualityFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(50)
-                        )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Track Selection",
-                        tint = Color.White
-                    )
-                }
+                        .border(width = if (isQualityFocused) 2.dp else 0.dp, color = if (isQualityFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
+                ) { Icon(imageVector = Icons.Default.Settings, contentDescription = "Quality", tint = Color.White) }
             }
         }
 
         val lockSource = remember { MutableInteractionSource() }
         val isLockFocused by lockSource.collectIsFocusedAsState()
-
-        LaunchedEffect(isLockFocused) {
-            if (isLockFocused) {
-                onInteraction()
-            }
-        }
-
+        LaunchedEffect(isLockFocused) { if (isLockFocused) onInteraction() }
         IconButton(
-            onClick = {
-                onLockToggle()
-                onInteraction()
-            },
+            onClick = { onLockToggle(); onInteraction() },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
                 .focusable(interactionSource = lockSource)
-                .border(
-                    width = if (isLockFocused) 2.dp else 0.dp,
-                    color = if (isLockFocused) Color.White else Color.Transparent,
-                    shape = RoundedCornerShape(50)
-                )
-        ) {
-            Icon(
-                imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
-                contentDescription = "Lock/Unlock Controls",
-                tint = Color.White
-            )
-        }
+                .border(width = if (isLockFocused) 2.dp else 0.dp, color = if (isLockFocused) Color.White else Color.Transparent, shape = RoundedCornerShape(50))
+        ) { Icon(imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen, contentDescription = "Lock", tint = Color.White) }
     }
 }
 
@@ -978,12 +674,13 @@ fun formatTime(timeMs: Long): String {
     val seconds = timeMs / 1000
     val minutes = seconds / 60
     val hours = minutes / 60
-
-    return when {
-        hours > 0 -> String.format("%d:%02d:%02d", hours, minutes % 60, seconds % 60)
-        else -> String.format("%d:%02d", minutes, seconds % 60)
-    }
+    return if (hours > 0) String.format("%d:%02d:%02d", hours, minutes % 60, seconds % 60)
+    else String.format("%d:%02d", minutes, seconds % 60)
 }
+
+// ============================================
+// CORE PLAYER & DRM IMPLEMENTATION
+// ============================================
 
 @UnstableApi
 private fun createSimplePlayerView(
@@ -1002,8 +699,6 @@ private fun createSimplePlayerView(
 
     val playerView = PlayerView(context).apply {
         useController = false
-        // PERBAIKAN DRM 2: Pastikan menggunakan SurfaceView (Default PlayerView menggunakan SurfaceView)
-        // Jangan paksa ke TextureView karena Widevine L1 butuh secure surface
         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT 
         setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
         setBackgroundColor(android.graphics.Color.BLACK)
@@ -1014,6 +709,11 @@ private fun createSimplePlayerView(
         setPadding(0, 0, 0, 0)
     }
 
+    Log.d("PlayerActivity", "=== Creating Player ===")
+    Log.d("PlayerActivity", "URL: $videoUrl")
+    Log.d("PlayerActivity", "DRM Type: ${headers["drm_type"]}")
+    Log.d("PlayerActivity", "DRM Key: ${headers["drm_key"]?.take(40)}")
+
     val requestProperties = mutableMapOf<String, String>()
     headers.forEach { (key, value) ->
         if (!key.startsWith("drm_")) {
@@ -1022,7 +722,7 @@ private fun createSimplePlayerView(
     }
 
     val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-        .setUserAgent(requestProperties["user-agent"] ?: "TvkuPlayer/1.0")
+        .setUserAgent(requestProperties["user-agent"] ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .setConnectTimeoutMs(15000)
         .setReadTimeoutMs(15000)
         .setDefaultRequestProperties(requestProperties)
@@ -1030,27 +730,21 @@ private fun createSimplePlayerView(
 
     val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
+    // PERBAIKAN UTAMA: Buat DRM Session Manager dengan benar
     val drmSessionManager = createDrmSessionManager(context, headers, httpDataSourceFactory)
-
-
+    
     val mediaSourceFactory = when {
-        headers["manifest_type"]?.lowercase() == "dash" -> {
-            DashMediaSource.Factory(dataSourceFactory)
-        }
-        headers["manifest_type"]?.lowercase() == "hls" -> {
-            HlsMediaSource.Factory(dataSourceFactory)
-        }
-        headers["manifest_type"]?.lowercase() == "progressive" -> {
-            ProgressiveMediaSource.Factory(dataSourceFactory)
-        }
-        else -> {
-            DefaultMediaSourceFactory(dataSourceFactory)
-        }
+        headers["manifest_type"]?.lowercase() == "dash" -> DashMediaSource.Factory(dataSourceFactory)
+        videoUrl.endsWith(".mpd", ignoreCase = true) -> DashMediaSource.Factory(dataSourceFactory)
+        headers["manifest_type"]?.lowercase() == "hls" -> HlsMediaSource.Factory(dataSourceFactory)
+        videoUrl.endsWith(".m3u8", ignoreCase = true) -> HlsMediaSource.Factory(dataSourceFactory)
+        else -> DefaultMediaSourceFactory(dataSourceFactory)
     }.setDrmSessionManagerProvider { drmSessionManager }
 
     val trackSelector = DefaultTrackSelector(context).apply {
         parameters = buildUponParameters()
-            .setMaxVideoSize(1280, 720)
+            .setMaxVideoSize(1920, 1080)
+            .setMinVideoSize(640, 360)
             .build()
     }
 
@@ -1063,24 +757,53 @@ private fun createSimplePlayerView(
         .setMediaSourceFactory(mediaSourceFactory)
         .build()
 
-    val mediaItem = createMediaItemWithDrm(videoUrl, headers, context)
+    // PERBAIKAN UTAMA: MediaItem dengan DRM config yang benar
+    val mediaItem = createMediaItem(videoUrl, headers)
 
     exoPlayer.addListener(object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             onLoadingChanged(playbackState == Player.STATE_BUFFERING)
+            Log.d("PlayerActivity", "State: ${
+                when(playbackState) {
+                    Player.STATE_IDLE -> "IDLE"
+                    Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"
+                    Player.STATE_ENDED -> "ENDED"
+                    else -> "UNKNOWN"
+                }
+            }")
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            val errorMessage = when {
-                videoUrl.startsWith("rtmp") && error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> {
-                    "RTMP connection failed. Please check the stream URL and network connection."
-                }
-                videoUrl.startsWith("rtmp") && error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> {
-                    "RTMP stream error. The stream may be offline or invalid."
-                }
-                else -> error.message ?: "Playback error"
+            Log.e("PlayerActivity", "ERROR [${error.errorCode}]: ${error.errorCodeName}", error)
+            val msg = when (error.errorCode) {
+                PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED -> "DRM License gagal - cek format key"
+                PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR -> "DRM System Error"
+                PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "Decoder Error"
+                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "HTTP Error - cek headers"
+                else -> error.message ?: "Error ${error.errorCodeName}"
             }
-            onError(errorMessage)
+            onError(msg)
+        }
+        
+        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+            Log.d("PlayerActivity", "Video: ${videoSize.width}x${videoSize.height}")
+        }
+        
+        override fun onRenderedFirstFrame() {
+            Log.d("PlayerActivity", "✓ First frame rendered!")
+        }
+        
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.contains(Player.EVENT_DRM_SESSION_ACQUIRED)) {
+                Log.d("PlayerActivity", "✓ DRM Session Acquired")
+            }
+            if (events.contains(Player.EVENT_DRM_KEYS_LOADED)) {
+                Log.d("PlayerActivity", "✓ DRM Keys Loaded")
+            }
+            if (events.contains(Player.EVENT_DRM_SESSION_MANAGER_ERROR)) {
+                Log.e("PlayerActivity", "✗ DRM Session Manager Error")
+            }
         }
     })
 
@@ -1090,255 +813,301 @@ private fun createSimplePlayerView(
     exoPlayer.playWhenReady = true
 
     onPlayerReady(exoPlayer)
-
     return playerView
 }
 
+/**
+ * PERBAIKAN UTAMA: MediaItem dengan DRM configuration yang benar untuk ClearKey
+ */
+@OptIn(UnstableApi::class)
+private fun createMediaItem(videoUrl: String, headers: Map<String, String>): MediaItem {
+    val drmType = headers["drm_type"]?.lowercase()
+    val drmKey = headers["drm_key"]
+    
+    val builder = MediaItem.Builder().setUri(Uri.parse(videoUrl))
+    
+    if (!drmType.isNullOrEmpty() && !drmKey.isNullOrEmpty()) {
+        try {
+            when {
+                drmType.contains("clearkey") -> {
+                    Log.d("PlayerActivity", "Building ClearKey MediaItem")
+                    
+                    // PERBAIKAN: Untuk ClearKey, kita perlu set license URI meskipun kita pakai LocalMediaDrmCallback
+                    // Media3 memerlukan ini untuk inisialisasi DRM session
+                    val drmConfig = MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID)
+                        .setMultiSession(true)
+                        .setForceDefaultLicenseUri(false)
+                    
+                    // Jika key adalah URL, set sebagai license URI
+                    if (drmKey.startsWith("http")) {
+                        drmConfig.setLicenseUri(drmKey)
+                    }
+                    
+                    builder.setDrmConfiguration(drmConfig.build())
+                    Log.d("PlayerActivity", "ClearKey DRM Config applied")
+                }
+                
+                drmType.contains("widevine") -> {
+                    Log.d("PlayerActivity", "Building Widevine MediaItem")
+                    val drmConfig = MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
+                        .setLicenseUri(drmKey)
+                        .setMultiSession(true)
+                        .setForceDefaultLicenseUri(true)
+                    builder.setDrmConfiguration(drmConfig.build())
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("PlayerActivity", "Error building DRM config: ${e.message}")
+        }
+    }
+    
+    return builder.build()
+}
+
+/**
+ * PERBAIKAN UTAMA: DRM Session Manager dengan pendekatan berbeda untuk ClearKey
+ */
 @OptIn(UnstableApi::class)
 private fun createDrmSessionManager(
     context: android.content.Context,
     headers: Map<String, String>,
     httpDataSourceFactory: DefaultHttpDataSource.Factory
 ): DrmSessionManager {
-
-    val drmType = headers["drm_type"]
-    val drmLicense = headers["drm_key"] ?: headers["license_url"]
-
-    if (drmType.isNullOrEmpty() || drmLicense.isNullOrEmpty()) {
+    
+    val drmType = headers["drm_type"]?.lowercase()
+    val drmKey = headers["drm_key"]
+    
+    Log.d("PlayerActivity", "=== Creating DRM Session Manager ===")
+    Log.d("PlayerActivity", "Type: $drmType")
+    Log.d("PlayerActivity", "Key: ${drmKey?.take(50)}...")
+    
+    if (drmType.isNullOrEmpty() || drmKey.isNullOrEmpty()) {
+        Log.d("PlayerActivity", "No DRM config, returning UNSUPPORTED")
         return DrmSessionManager.DRM_UNSUPPORTED
     }
 
     return try {
-        val mediaDrmCallback: MediaDrmCallback = when {
-            drmType.lowercase().contains("clearkey") -> {
-
-                val clearkeyData = when {
-                    drmLicense.startsWith("data:application/json;base64,") -> {
-                        val base64Data = drmLicense.removePrefix("data:application/json;base64,")
-                        try {
-                            val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                            val decoded = String(decodedBytes, Charsets.UTF_8).trim()
-
-                            processAndFixClearkeyJson(decoded)
-                        } catch (e: Exception) {
-                            return DrmSessionManager.DRM_UNSUPPORTED
-                        }
-                    }
-                    drmLicense.startsWith("{") -> {
-                        processAndFixClearkeyJson(drmLicense)
-                    }
-                    drmLicense.startsWith("http") -> {
-                        HttpMediaDrmCallback(drmLicense, httpDataSourceFactory)
-                    }
-                    drmLicense.contains(":") -> {
-                        convertHexToJson(drmLicense)
-                    }
-                    else -> {
-                        Uri.decode(drmLicense)
-                    }
-                }
-
-                if (clearkeyData is String) {
-
-                    if (!clearkeyData.contains("keys") || !clearkeyData.contains("kid")) {
-                        return DrmSessionManager.DRM_UNSUPPORTED
-                    }
-
-                    val cleanJson = clearkeyData.trim()
-                    LocalMediaDrmCallback(cleanJson.toByteArray(Charsets.UTF_8))
-                } else {
-                    clearkeyData as MediaDrmCallback
-                }
+        val callback: MediaDrmCallback = when {
+            drmType.contains("clearkey") -> {
+                createClearKeyCallback(drmKey, httpDataSourceFactory)
             }
-
-            drmType.lowercase().contains("widevine") -> {
+            
+            drmType.contains("widevine") -> {
                 if (context is PlayerActivity && !context.isDrmWidevineSupported()) {
                     return DrmSessionManager.DRM_UNSUPPORTED
                 }
-
-                val callback = HttpMediaDrmCallback(drmLicense, httpDataSourceFactory)
-
-                headers["drm_token"]?.let { token ->
-                    callback.setKeyRequestProperty("Authorization", "Bearer $token")
-                }
-
-                headers["authorization"]?.let { auth ->
-                    callback.setKeyRequestProperty("Authorization", auth)
-                }
-
-                callback
+                val cb = HttpMediaDrmCallback(drmKey, httpDataSourceFactory)
+                headers["drm_token"]?.let { cb.setKeyRequestProperty("Authorization", "Bearer $it") }
+                headers["authorization"]?.let { cb.setKeyRequestProperty("Authorization", it) }
+                cb
             }
-
-            else -> {
-                return DrmSessionManager.DRM_UNSUPPORTED
-            }
+            
+            else -> return DrmSessionManager.DRM_UNSUPPORTED
         }
 
-        val drmSchemeUuid = when {
-            drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
-            drmType.lowercase().contains("widevine") -> C.WIDEVINE_UUID
-            drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
-            else -> {
-                return DrmSessionManager.DRM_UNSUPPORTED
-            }
+        val uuid = when {
+            drmType.contains("clearkey") -> C.CLEARKEY_UUID
+            drmType.contains("widevine") -> C.WIDEVINE_UUID
+            else -> return DrmSessionManager.DRM_UNSUPPORTED
         }
 
-        // PERBAIKAN DRM 3: Tambahkan multiSession(true) untuk stream Live seperti RCTI
+        Log.d("PlayerActivity", "Building session manager with UUID: $uuid")
+        
+        // PERBAIKAN: Gunakan playClearSamplesWithoutKeys(true) untuk debugging
         val sessionManager = DefaultDrmSessionManager.Builder()
-            .setUuidAndExoMediaDrmProvider(drmSchemeUuid, FrameworkMediaDrm.DEFAULT_PROVIDER)
+            .setUuidAndExoMediaDrmProvider(uuid, FrameworkMediaDrm.DEFAULT_PROVIDER)
             .setMultiSession(true)
-            .build(mediaDrmCallback)
+            .build(callback)
+            
+        Log.d("PlayerActivity", "DRM Session Manager created successfully")
         sessionManager
-
+        
     } catch (e: Exception) {
+        Log.e("PlayerActivity", "Failed to create DRM Session Manager: ${e.message}", e)
         DrmSessionManager.DRM_UNSUPPORTED
     }
 }
 
-private fun processAndFixClearkeyJson(jsonString: String): String {
-    return try {
-
-        val jsonObj = JSONObject(jsonString)
-        val keysArray = jsonObj.getJSONArray("keys")
-
-        for (i in 0 until keysArray.length()) {
-            val keyObj = keysArray.getJSONObject(i)
-            val kid = keyObj.getString("kid").trim()
-            val k = keyObj.getString("k").trim()
-
-            val isKidHex = kid.length >= 16 && kid.matches(Regex("[0-9a-fA-F]+"))
-            val isKeyHex = k.length >= 16 && k.matches(Regex("[0-9a-fA-F]+"))
-
-            if (isKidHex) {
-                val kidBytes = kid.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                val kidBase64 = android.util.Base64.encodeToString(kidBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
-                keyObj.put("kid", kidBase64)
-            } else {
-                val urlSafeKid = convertToUrlSafeBase64(kid)
-                if (urlSafeKid != kid) {
-                    keyObj.put("kid", urlSafeKid)
-                }
-            }
-
-            if (isKeyHex) {
-                val keyBytes = k.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                val keyBase64 = android.util.Base64.encodeToString(keyBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
-                keyObj.put("k", keyBase64)
-            } else {
-                val urlSafeKey = convertToUrlSafeBase64(k)
-                if (urlSafeKey != k) {
-                    keyObj.put("k", urlSafeKey)
-                }
-            }
-        }
-
-        val cleanedJson = JSONObject()
-        cleanedJson.put("keys", keysArray)
-
-        val result = cleanedJson.toString().trim()
-        result
-
-    } catch (e: Exception) {
-        jsonString
-    }
-}
-
-private fun convertToUrlSafeBase64(base64String: String): String {
-    return base64String
-        .trim()
-        .replace('+', '-')
-        .replace('/', '_')
-        .replace("=", "")
-}
-
-private fun convertHexToJson(kidKeyHex: String): String {
-    return try {
-        val parts = kidKeyHex.split(":")
-        if (parts.size != 2) {
-            return "{}"
-        }
-
-        val kidHex = parts[0].trim()
-        val keyHex = parts[1].trim()
-
-        val kidBytes = kidHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-
-        val kidBase64 = android.util.Base64.encodeToString(kidBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
-        val keyBase64 = android.util.Base64.encodeToString(keyBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING).trim()
-
-        val clearkeyJson = """{"keys":[{"kty":"oct","k":"$keyBase64","kid":"$kidBase64"}]}"""
-
-        clearkeyJson
-
-    } catch (e: Exception) {
-        "{}"
-    }
-}
-
+/**
+ * PERBAIKAN UTAMA: ClearKey Callback dengan format yang benar-benar sesuai EME spec
+ */
 @OptIn(UnstableApi::class)
-private fun createMediaItemWithDrm(
-    videoUrl: String,
-    headers: Map<String, String>,
-    context: android.content.Context
-): MediaItem {
-
-    val drmType = headers["drm_type"]
-    val drmLicense = headers["drm_key"] ?: headers["license_url"]
-
-    var mediaItem = MediaItem.fromUri(Uri.parse(videoUrl))
-
-    if (!drmType.isNullOrEmpty() && !drmLicense.isNullOrEmpty()) {
-
-        try {
-            val drmSchemeUuid = when {
-                drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
-                drmType.lowercase().contains("widevine") -> {
-                    if (context is PlayerActivity && !context.isDrmWidevineSupported()) {
-                        return mediaItem
-                    }
-                    C.WIDEVINE_UUID
-                }
-                drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
-                else -> {
-                    return mediaItem
-                }
-            }
-
-            val drmConfigBuilder = MediaItem.DrmConfiguration.Builder(drmSchemeUuid)
-
-            when {
-                drmType.lowercase().contains("clearkey") -> {
-                    if (drmLicense.startsWith("http")) {
-                        drmConfigBuilder
-                            .setLicenseUri(drmLicense)
-                            .setForceDefaultLicenseUri(true)
-                    } else {
-                    }
-                }
-                drmType.lowercase().contains("widevine") -> {
-                    drmConfigBuilder
-                        .setLicenseUri(drmLicense)
-                        // PERBAIKAN DRM 4: Pastikan multiSession aktif di MediaItem
-                        .setMultiSession(true)
-                        .setForceDefaultLicenseUri(true)
-                }
-                drmType.lowercase().contains("playready") -> {
-                    drmConfigBuilder
-                        .setLicenseUri(drmLicense)
-                        .setForceDefaultLicenseUri(true)
-                }
-            }
-
-            mediaItem = MediaItem.Builder()
-                .setUri(Uri.parse(videoUrl))
-                .setDrmConfiguration(drmConfigBuilder.build())
-                .build()
-
-        } catch (e: Exception) {
-            mediaItem = MediaItem.fromUri(Uri.parse(videoUrl))
+private fun createClearKeyCallback(
+    drmKey: String,
+    httpDataSourceFactory: DefaultHttpDataSource.Factory
+): MediaDrmCallback {
+    
+    Log.d("PlayerActivity", "Creating ClearKey callback for: ${drmKey.take(30)}")
+    
+    // Deteksi format dan konversi ke JSON yang benar
+    val clearKeyJson = when {
+        // Format 1: HTTP URL
+        drmKey.startsWith("http") -> {
+            return HttpMediaDrmCallback(drmKey, httpDataSourceFactory)
+        }
+        
+        // Format 2: Data URI
+        drmKey.startsWith("data:application/json;base64,") -> {
+            val base64 = drmKey.removePrefix("data:application/json;base64,")
+            val decoded = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), Charsets.UTF_8)
+            fixClearKeyJson(decoded)
+        }
+        
+        // Format 3: JSON langsung
+        drmKey.trim().startsWith("{") -> {
+            fixClearKeyJson(drmKey)
+        }
+        
+        // Format 4: HEX KID:KEY (Vision+ format)
+        // Contoh: d386001215594043a8995db796ad9e9c:3404792cb4c804902acdc6ca65c1a298
+        drmKey.contains(":") && isHexFormat(drmKey) -> {
+            hexToClearKeyJson(drmKey)
+        }
+        
+        // Format 5: Single key hex (32 chars)
+        drmKey.length == 32 && drmKey.matches(Regex("[0-9a-fA-F]+")) -> {
+            // Asumsi ini adalah key, tapi kita butuh KID juga
+            Log.w("PlayerActivity", "Single hex key detected, need KID!")
+            throw IllegalArgumentException("Format harus KID:KEY")
+        }
+        
+        else -> {
+            Log.e("PlayerActivity", "Unknown ClearKey format")
+            throw IllegalArgumentException("Unknown ClearKey format")
         }
     }
+    
+    Log.d("PlayerActivity", "ClearKey JSON: $clearKeyJson")
+    
+    // PERBAIKAN UTAMA: Pastikan encoding UTF-8 yang benar
+    return LocalMediaDrmCallback(clearKeyJson.toByteArray(Charsets.UTF_8))
+}
 
-    return mediaItem
+/**
+ * Konversi format HEX KID:KEY ke JSON ClearKey yang valid
+ */
+private fun hexToClearKeyJson(hexInput: String): String {
+    Log.d("PlayerActivity", "Converting HEX to ClearKey JSON")
+    
+    val parts = hexInput.split(":")
+    if (parts.size != 2) {
+        throw IllegalArgumentException("Format harus KID:KEY")
+    }
+    
+    val kidHex = parts[0].trim().replace(Regex("[^0-9a-fA-F]"), "")
+    val keyHex = parts[1].trim().replace(Regex("[^0-9a-fA-F]"), "")
+    
+    Log.d("PlayerActivity", "KID HEX ($kidHex.length): ${kidHex.take(16)}...")
+    Log.d("PlayerActivity", "KEY HEX ($keyHex.length): ${keyHex.take(16)}...")
+    
+    // Validasi panjang
+    if (kidHex.length != 32 || keyHex.length != 32) {
+        Log.w("PlayerActivity", "Hex length not 32 chars! KID=${kidHex.length}, KEY=${keyHex.length}")
+    }
+    
+    // Convert hex to bytes
+    val kidBytes = hexStringToByteArray(kidHex)
+    val keyBytes = hexStringToByteArray(keyHex)
+    
+    // Encode to Base64URL (RFC 4648)
+    val kidBase64 = base64UrlEncode(kidBytes)
+    val keyBase64 = base64UrlEncode(keyBytes)
+    
+    Log.d("PlayerActivity", "KID Base64URL: $kidBase64")
+    Log.d("PlayerActivity", "KEY Base64URL: $keyBase64")
+    
+    // Format JSON sesuai EME spec - wajib ada "kty": "oct"
+    return """{"keys":[{"kty":"oct","kid":"$kidBase64","k":"$keyBase64"}]}"""
+}
+
+/**
+ * Helper: Convert hex string to byte array
+ */
+private fun hexStringToByteArray(hex: String): ByteArray {
+    val len = hex.length
+    val data = ByteArray(len / 2)
+    var i = 0
+    while (i < len) {
+        data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+        i += 2
+    }
+    return data
+}
+
+/**
+ * Helper: Base64URL encoding (RFC 4648)
+ */
+private fun base64UrlEncode(data: ByteArray): String {
+    return android.util.Base64.encodeToString(data, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING)
+        .trim()
+}
+
+/**
+ * Helper: Cek apakah string adalah format HEX KID:KEY
+ */
+private fun isHexFormat(str: String): Boolean {
+    val parts = str.split(":")
+    if (parts.size != 2) return false
+    val hexPattern = Regex("^[0-9a-fA-F]+$")
+    return parts[0].replace(Regex("[^0-9a-fA-F]"), "").matches(hexPattern) &&
+           parts[1].replace(Regex("[^0-9a-fA-F]"), "").matches(hexPattern)
+}
+
+/**
+ * Perbaiki dan validasi JSON ClearKey yang sudah ada
+ */
+private fun fixClearKeyJson(json: String): String {
+    try {
+        val obj = JSONObject(json)
+        
+        if (!obj.has("keys")) {
+            throw IllegalArgumentException("JSON harus punya array 'keys'")
+        }
+        
+        val keys = obj.getJSONArray("keys")
+        val fixedKeys = JSONArray()
+        
+        for (i in 0 until keys.length()) {
+            val key = keys.getJSONObject(i)
+            val fixedKey = JSONObject()
+            
+            // Wajib ada kty: oct
+            fixedKey.put("kty", "oct")
+            
+            // Fix kid dan k ke base64url
+            if (key.has("kid")) {
+                val kid = key.getString("kid")
+                fixedKey.put("kid", toBase64Url(kid))
+            }
+            
+            if (key.has("k")) {
+                val k = key.getString("k")
+                fixedKey.put("k", toBase64Url(k))
+            }
+            
+            fixedKeys.put(fixedKey)
+        }
+        
+        val result = JSONObject()
+        result.put("keys", fixedKeys)
+        
+        return result.toString()
+        
+    } catch (e: Exception) {
+        Log.w("PlayerActivity", "JSON fix failed: ${e.message}")
+        return json
+    }
+}
+
+/**
+ * Convert ke base64url
+ */
+private fun toBase64Url(str: String): String {
+    // Jika sudah base64url, return as-is
+    if (!str.contains("+") && !str.contains("/") && !str.contains("=")) {
+        return str
+    }
+    
+    // Convert dari base64 standar
+    return str.replace("+", "-").replace("/", "_").replace("=", "")
 }
