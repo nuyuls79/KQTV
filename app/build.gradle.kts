@@ -55,17 +55,17 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // ExoPlayer (Media3) - versi 1.6.1
+    // ExoPlayer (Media3) - versi 1.5.0 (stabil)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.exoplayer.drm)      // untuk DRM
     implementation(libs.media3.datasource)
-    implementation(libs.androidx.media3.datasource.rtmp)
+    implementation(libs.androidx.media3.datasource.rtmp) // jika masih perlu
 
-    // Icons tambahan (hardcode sementara untuk menghindari kebingungan alias)
-    implementation("androidx.compose.material:material-icons-extended:1.7.0")
+    // Icons tambahan
+    implementation(libs.material.icons.extended)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
@@ -92,7 +92,7 @@ dependencies {
     implementation(libs.androidx.foundation.android)
     implementation(libs.volley)
 
-    // Accompanist
+    // Accompanist (jika diperlukan)
     implementation(libs.accompanist.placeholder.material)
 
     // Firebase BOM (menggunakan alias dari catalog)
