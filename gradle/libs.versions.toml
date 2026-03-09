@@ -1,57 +1,26 @@
 [versions]
-# Plugin
 agp = "8.10.1"
 kotlin = "2.0.21"
-
-# AndroidX
 coreKtx = "1.16.0"
 lifecycleRuntimeKtx = "2.9.1"
 activityCompose = "1.10.1"
 appcompat = "1.7.1"
 recyclerview = "1.4.0"
-
-# Compose
 composeBom = "2024.09.00"
-materialIconsExtended = "1.7.0"           # versi material-icons-extended (synchronize dengan compose bom)
-foundationAndroid = "1.7.0"               # foundation-android (versi manual)
-
-# Media3 (ExoPlayer)
-media3 = "1.7.1"
-
-# Coroutines
+materialIconsExtended = "1.7.0"
+foundationAndroid = "1.7.0"
+media3 = "1.6.1"            # versi stabil yang tersedia
 coroutines = "1.8.1"
-
-# Coil
 coil = "2.7.0"
-
-# WorkManager
 work = "2.9.1"
-
-# Concurrent Futures
 concurrent = "1.2.0"
-
-# Lifecycle (selain runtime-ktx)
-lifecycle = "2.8.5"                        # untuk process, viewmodel-compose, dll
-
-# Firebase
+lifecycle = "2.8.5"
 firebaseBom = "33.5.0"
-
-# Accompanist
 accompanist = "0.35.0-alpha"
-
-# LeakCanary
 leakcanary = "2.14"
-
-# Material (Material Design library)
 material = "1.12.0"
-
-# Transport API
 transportApi = "3.0.0"
-
-# Volley
 volley = "1.2.1"
-
-# Testing
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
@@ -114,7 +83,7 @@ volley = { group = "com.android.volley", name = "volley", version.ref = "volley"
 # Accompanist
 accompanist-placeholder-material = { group = "com.google.accompanist", name = "accompanist-placeholder-material", version.ref = "accompanist" }
 
-# Firebase BOM (opsional, bisa langsung ditulis di build.gradle)
+# Firebase BOM
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 
 # LeakCanary
