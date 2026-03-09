@@ -79,6 +79,10 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // PERBAIKAN DRM 1: Tambahkan FLAG_SECURE agar sistem mengizinkan rendering konten terlindungi
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        
         if (!VpnHelper.isNetworkSecure(this)) {
             Toast.makeText(this, "Akses ditolak karena alasan keamanan", Toast.LENGTH_LONG).show()
             finish()
@@ -998,7 +1002,9 @@ private fun createSimplePlayerView(
 
     val playerView = PlayerView(context).apply {
         useController = false
-        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT // Default mode
+        // PERBAIKAN DRM 2: Pastikan menggunakan SurfaceView (Default PlayerView menggunakan SurfaceView)
+        // Jangan paksa ke TextureView karena Widevine L1 butuh secure surface
+        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT 
         setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
         setBackgroundColor(android.graphics.Color.BLACK)
         layoutParams = FrameLayout.LayoutParams(
@@ -1177,9 +1183,10 @@ private fun createDrmSessionManager(
             }
         }
 
+        // PERBAIKAN DRM 3: Tambahkan multiSession(true) untuk stream Live seperti RCTI
         val sessionManager = DefaultDrmSessionManager.Builder()
             .setUuidAndExoMediaDrmProvider(drmSchemeUuid, FrameworkMediaDrm.DEFAULT_PROVIDER)
-            .setMultiSession(drmType.lowercase().contains("widevine"))
+            .setMultiSession(true)
             .build(mediaDrmCallback)
         sessionManager
 
@@ -1312,6 +1319,7 @@ private fun createMediaItemWithDrm(
                 drmType.lowercase().contains("widevine") -> {
                     drmConfigBuilder
                         .setLicenseUri(drmLicense)
+                        // PERBAIKAN DRM 4: Pastikan multiSession aktif di MediaItem
                         .setMultiSession(true)
                         .setForceDefaultLicenseUri(true)
                 }
