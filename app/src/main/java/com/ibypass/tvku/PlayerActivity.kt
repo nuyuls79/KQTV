@@ -123,7 +123,8 @@ class PlayerActivity : AppCompatActivity() {
         }
         // Map user_agent ke user-agent untuk http request
         if (headerMap.containsKey("user_agent")) {
-            headerMap["user-agent"] = headerMap["user_agent"]
+            // Gunakan getValue untuk memastikan non-null (telah dicek dengan containsKey)
+            headerMap["user-agent"] = headerMap.getValue("user_agent")
         }
         // Dukungan untuk key "user-agent" langsung (tanpa underscore)
         intent.getStringExtra("user-agent")?.let { value ->
