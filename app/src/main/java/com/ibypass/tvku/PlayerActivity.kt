@@ -43,8 +43,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.dash.DashMediaSource
-import androidx.media3.ui.PlayerView
-import androidx.media3.common.C
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.DrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkMediaDrm
@@ -62,6 +60,242 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.ZoomOutMap
 
+/**
+ * Data class untuk menyimpan informasi channel dari M3U playlist
+ */
+data class Channel(
+    val name: String,
+    val url: String,
+    val logo: String? = null,
+    val group: String? = null,
+    val tvgId: String? = null,
+    val headers: Map<String, String> = emptyMap()
+) {
+    /**
+     * Mengkonversi channel ke format headers yang dipahami PlayerActivity
+     */
+    fun toPlayerHeaders(): Map<String, String> {
+        val playerHeaders = headers.toMutableMap()
+        
+        // Auto-detect manifest type dari URL jika belum di-set
+        if (!playerHeaders.containsKey("manifest_type")) {
+            when {
+                url.endsWith(".mpd", ignoreCase = true) -> {
+                    playerHeaders["manifest_type"] = "dash"
+                }
+                url.endsWith(".m3u8", ignoreCase = true) || url.contains(".m3u8") -> {
+                    playerHeaders["manifest_type"] = "hls"
+                }
+                url.endsWith(".mp4", ignoreCase = true) || 
+                url.endsWith(".mkv", ignoreCase = true) ||
+                url.endsWith(".webm", ignoreCase = true) -> {
+                    playerHeaders["manifest_type"] = "progressive"
+                }
+            }
+        }
+        
+        return playerHeaders
+    }
+}
+
+/**
+ * Parser untuk M3U playlist dengan dukungan KODIPROP dan EXTVLCOPT
+ */
+object M3UParser {
+    
+    /**
+     * Parse konten M3U playlist menjadi list Channel
+     * Mendukung format:
+     * - #KODIPROP:inputstream.adaptive.license_type=clearkey
+     * - #KODIPROP:inputstream.adaptive.license_key=kid:key
+     * - #EXTVLCOPT:http-user-agent=xxx
+     */
+    fun parse(m3uContent: String): List<Channel> {
+        val channels = mutableListOf<Channel>()
+        val lines = m3uContent.lines()
+        
+        var currentHeaders = mutableMapOf<String, String>()
+        var currentExtInf: String? = null
+        
+        for (line in lines) {
+            val trimmedLine = line.trim()
+            
+            when {
+                // Skip header M3U
+                trimmedLine.startsWith("#EXTM3U") -> continue
+                
+                // Parse KODIPROP
+                trimmedLine.startsWith("#KODIPROP:") -> {
+                    parseKodiprop(trimmedLine, currentHeaders)
+                }
+                
+                // Parse EXTVLCOPT
+                trimmedLine.startsWith("#EXTVLCOPT:") -> {
+                    parseExtVlcOpt(trimmedLine, currentHeaders)
+                }
+                
+                // Parse EXTINF
+                trimmedLine.startsWith("#EXTINF:") -> {
+                    currentExtInf = trimmedLine
+                }
+                
+                // Parse URL (line yang bukan comment dan tidak kosong)
+                trimmedLine.isNotEmpty() && !trimmedLine.startsWith("#") -> {
+                    val url = trimmedLine
+                    val channel = createChannel(currentExtInf, url, currentHeaders)
+                    if (channel != null) {
+                        channels.add(channel)
+                    }
+                    // Reset untuk channel berikutnya
+                    currentHeaders = mutableMapOf()
+                    currentExtInf = null
+                }
+            }
+        }
+        
+        return channels
+    }
+    
+    /**
+     * Parse single channel dari string M3U (berguna untuk intent extra)
+     */
+    fun parseSingleChannel(m3uContent: String): Channel? {
+        val channels = parse(m3uContent)
+        return channels.firstOrNull()
+    }
+    
+    private fun parseKodiprop(line: String, headers: MutableMap<String, String>) {
+        // Format: #KODIPROP:inputstream.adaptive.license_type=clearkey
+        val propContent = line.removePrefix("#KODIPROP:").trim()
+        val equalIndex = propContent.indexOf("=")
+        
+        if (equalIndex > 0) {
+            val key = propContent.substring(0, equalIndex).trim()
+            val value = propContent.substring(equalIndex + 1).trim()
+            
+            when {
+                key.contains("license_type") -> {
+                    // Konversi ke format drm_type
+                    val drmType = when (value.lowercase()) {
+                        "clearkey", "org.w3.clearkey" -> "clearkey"
+                        "com.widevine.alpha" -> "widevine"
+                        "com.microsoft.playready" -> "playready"
+                        else -> value.lowercase()
+                    }
+                    headers["drm_type"] = drmType
+                }
+                key.contains("license_key") -> {
+                    // Format: 4035323a7fe64767ab8f3345ed9b93be:67377b8d429603f8bf30c161bda269e5
+                    headers["drm_key"] = value
+                }
+                key.contains("stream_headers") -> {
+                    // Parse stream_headers format: param1=value1&param2=value2
+                    parseStreamHeaders(value, headers)
+                }
+                key.contains("manifest_type") -> {
+                    headers["manifest_type"] = value.lowercase()
+                }
+                key.contains("drm_legacy") -> {
+                    // Format: org.w3.clearkey|kid:key
+                    parseDrmLegacy(value, headers)
+                }
+            }
+        }
+    }
+    
+    private fun parseExtVlcOpt(line: String, headers: MutableMap<String, String>) {
+        // Format: #EXTVLCOPT:http-user-agent=Mozilla/5.0 ...
+        val optContent = line.removePrefix("#EXTVLCOPT:").trim()
+        val equalIndex = optContent.indexOf("=")
+        
+        if (equalIndex > 0) {
+            val key = optContent.substring(0, equalIndex).trim()
+            val value = optContent.substring(equalIndex + 1).trim()
+            
+            when (key.lowercase()) {
+                "http-user-agent" -> headers["user-agent"] = value
+                "http-referrer" -> headers["referer"] = value
+                "http-referer" -> headers["referer"] = value
+                "http-origin" -> headers["origin"] = value
+                else -> headers[key] = value
+            }
+        }
+    }
+    
+    private fun parseStreamHeaders(value: String, headers: MutableMap<String, String>) {
+        // Format: User-Agent=XXX&Referer=YYY
+        val pairs = value.split("&")
+        for (pair in pairs) {
+            val keyValue = pair.split("=", limit = 2)
+            if (keyValue.size == 2) {
+                val headerKey = keyValue[0].trim()
+                val headerValue = keyValue[1].trim()
+                
+                // Map common headers
+                when (headerKey.lowercase()) {
+                    "user-agent" -> headers["user-agent"] = headerValue
+                    "referer", "referrer" -> headers["referer"] = headerValue
+                    "origin" -> headers["origin"] = headerValue
+                    else -> headers[headerKey] = headerValue
+                }
+            }
+        }
+    }
+    
+    private fun parseDrmLegacy(value: String, headers: MutableMap<String, String>) {
+        // Format: org.w3.clearkey|4035323a7fe64767ab8f3345ed9b93be:67377b8d429603f8bf30c161bda269e5
+        val parts = value.split("|")
+        if (parts.size >= 2) {
+            val scheme = parts[0].trim()
+            val keys = parts[1].trim()
+            
+            when {
+                scheme.contains("clearkey", ignoreCase = true) -> {
+                    headers["drm_type"] = "clearkey"
+                    headers["drm_key"] = keys
+                }
+                scheme.contains("widevine", ignoreCase = true) -> {
+                    headers["drm_type"] = "widevine"
+                    headers["license_url"] = keys
+                }
+            }
+        }
+    }
+    
+    private fun createChannel(extInf: String?, url: String, headers: Map<String, String>): Channel? {
+        if (extInf == null) return null
+        
+        // Parse #EXTINF:-1 tvg-id="..." tvg-name="..." tvg-logo="..." group-title="...",Channel Name
+        val name: String
+        val attributes = mutableMapOf<String, String>()
+        
+        // Extract channel name (setelah koma terakhir)
+        val commaIndex = extInf.lastIndexOf(",")
+        name = if (commaIndex > 0) {
+            extInf.substring(commaIndex + 1).trim()
+        } else {
+            "Unknown Channel"
+        }
+        
+        // Parse attributes
+        val attrPattern = """(\w+)="([^"]*)"""".toRegex()
+        val matches = attrPattern.findAll(extInf)
+        for (match in matches) {
+            val attrName = match.groupValues[1]
+            val attrValue = match.groupValues[2]
+            attributes[attrName] = attrValue
+        }
+        
+        return Channel(
+            name = attributes["tvg-name"] ?: name,
+            url = url,
+            logo = attributes["tvg-logo"],
+            group = attributes["group-title"],
+            tvgId = attributes["tvg-id"],
+            headers = headers.toMap()
+        )
+    }
+}
 
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
@@ -72,7 +306,6 @@ class PlayerActivity : AppCompatActivity() {
     private var headers: Map<String, String> = emptyMap()
     var trackSelector: DefaultTrackSelector? = null
     private var currentQuality: QualityOption? = null
-
 
     private val fullscreenHandler = Handler(Looper.getMainLooper())
     private var isActivityVisible = false
@@ -92,6 +325,67 @@ class PlayerActivity : AppCompatActivity() {
         isActivityVisible = true
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
 
+        // Cek apakah ada M3U content yang dikirim
+        val m3uContent = intent.getStringExtra("m3u_content")
+        val channelData = intent.getSerializableExtra("channel_data") as? Channel
+        
+        if (m3uContent != null) {
+            // Parse dari M3U content
+            val channel = M3UParser.parseSingleChannel(m3uContent)
+            if (channel != null) {
+                setupFromChannel(channel)
+            } else {
+                Toast.makeText(this, "Format M3U tidak valid", Toast.LENGTH_SHORT).show()
+                finish()
+                return
+            }
+        } else if (channelData != null) {
+            // Langsung dari Channel object
+            setupFromChannel(channelData)
+        } else {
+            // Fallback ke cara lama (backward compatibility)
+            setupFromLegacyIntent()
+        }
+
+        if (videoUrl.isNullOrEmpty()) {
+            Toast.makeText(this, "URL tidak valid", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
+        setContent {
+            CustomPlayerScreen(
+                videoUrl = videoUrl!!,
+                channelName = channelName!!,
+                headers = headers,
+                onPlayerReady = { player -> exoPlayer = player },
+                onError = { error ->
+                    Toast.makeText(this@PlayerActivity, "Error: $error", Toast.LENGTH_LONG).show()
+                },
+                onQualityClick = { showQualityDialog() },
+                onExitClick = { finish() }
+            )
+        }
+    }
+    
+    /**
+     * Setup player dari Channel object (format baru)
+     */
+    private fun setupFromChannel(channel: Channel) {
+        videoUrl = VpnHelper.unprotectUrl(channel.url)
+        channelName = channel.name
+        
+        val secureHeaders = VpnHelper.generateSecureHeaders(this)
+        val combinedHeaders = mutableMapOf<String, String>()
+        combinedHeaders.putAll(secureHeaders)
+        combinedHeaders.putAll(channel.toPlayerHeaders())
+        headers = combinedHeaders
+    }
+    
+    /**
+     * Setup player dari intent lama (backward compatibility)
+     */
+    private fun setupFromLegacyIntent() {
         videoUrl = intent.getStringExtra("video_url")?.let { url ->
             VpnHelper.unprotectUrl(url)
         }
@@ -114,26 +408,6 @@ class PlayerActivity : AppCompatActivity() {
         combinedHeaders.putAll(secureHeaders)
         combinedHeaders.putAll(headerMap)
         headers = combinedHeaders
-
-        if (videoUrl.isNullOrEmpty()) {
-            Toast.makeText(this, "URL tidak valid", Toast.LENGTH_SHORT).show()
-            finish()
-            return
-        }
-
-        setContent {
-            CustomPlayerScreen(
-                videoUrl = videoUrl!!,
-                channelName = channelName!!,
-                headers = headers,
-                onPlayerReady = { player -> exoPlayer = player },
-                onError = { error ->
-                    Toast.makeText(this@PlayerActivity, "Error: $error", Toast.LENGTH_LONG).show()
-                },
-                onQualityClick = { showQualityDialog() },
-                onExitClick = { finish() }
-            )
-        }
     }
 
     private fun forceHideSystemUI() {
@@ -163,7 +437,7 @@ class PlayerActivity : AppCompatActivity() {
 
     fun isDrmWidevineSupported(): Boolean {
         return try {
-            val mediaDrm = FrameworkMediaDrm.newInstance(C.WIDEVINE_UUID)
+            val mediaDrm = FrameworkMediaDrm.newInstance(androidx.media3.common.C.WIDEVINE_UUID)
             mediaDrm.release()
             true
         } catch (e: Exception) {
@@ -1169,9 +1443,9 @@ private fun createDrmSessionManager(
         }
 
         val drmSchemeUuid = when {
-            drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
-            drmType.lowercase().contains("widevine") -> C.WIDEVINE_UUID
-            drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
+            drmType.lowercase().contains("clearkey") -> androidx.media3.common.C.CLEARKEY_UUID
+            drmType.lowercase().contains("widevine") -> androidx.media3.common.C.WIDEVINE_UUID
+            drmType.lowercase().contains("playready") -> androidx.media3.common.C.PLAYREADY_UUID
             else -> {
                 return DrmSessionManager.DRM_UNSUPPORTED
             }
@@ -1285,14 +1559,14 @@ private fun createMediaItemWithDrm(
 
         try {
             val drmSchemeUuid = when {
-                drmType.lowercase().contains("clearkey") -> C.CLEARKEY_UUID
+                drmType.lowercase().contains("clearkey") -> androidx.media3.common.C.CLEARKEY_UUID
                 drmType.lowercase().contains("widevine") -> {
                     if (context is PlayerActivity && !context.isDrmWidevineSupported()) {
                         return mediaItem
                     }
-                    C.WIDEVINE_UUID
+                    androidx.media3.common.C.WIDEVINE_UUID
                 }
-                drmType.lowercase().contains("playready") -> C.PLAYREADY_UUID
+                drmType.lowercase().contains("playready") -> androidx.media3.common.C.PLAYREADY_UUID
                 else -> {
                     return mediaItem
                 }
