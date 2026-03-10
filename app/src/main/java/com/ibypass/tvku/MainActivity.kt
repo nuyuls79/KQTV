@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // PLAYLIST HARDCODE
-                val playlistUrl = "https://raw.githubusercontent.com/mimipipi22/lalajo/refs/heads/main/playlist25"
+                val playlistUrl = "https://permatasb.my.id/sources/test_tv.php"
 
                 setContent {
                     TvkuTheme(darkTheme = true) {
