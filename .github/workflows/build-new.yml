@@ -1,4 +1,4 @@
-name: Build APK Release Fix2
+name: Build APK Release Fix2 Patch
 
 on:
   workflow_dispatch:
